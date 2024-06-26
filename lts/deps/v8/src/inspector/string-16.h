@@ -6,6 +6,7 @@
 #define V8_INSPECTOR_STRING_16_H_
 
 #include <stdint.h>
+
 #include <cctype>
 #include <climits>
 #include <cstring>
@@ -26,8 +27,8 @@ class String16 {
   String16(const String16&) V8_NOEXCEPT = default;
   String16(String16&&) V8_NOEXCEPT = default;
   String16(const UChar* characters, size_t size);
-  V8_EXPORT String16(const UChar* characters);  // NOLINT(runtime/explicit)
-  String16(const char* characters);   // NOLINT(runtime/explicit)
+  V8_EXPORT String16(const UChar* characters);
+  V8_EXPORT String16(const char* characters);
   String16(const char* characters, size_t size);
   explicit String16(const std::basic_string<UChar>& impl);
   explicit String16(std::basic_string<UChar>&& impl);
@@ -37,11 +38,15 @@ class String16 {
 
   static String16 fromInteger(int);
   static String16 fromInteger(size_t);
+  static String16 fromInteger64(int64_t);
+  static String16 fromUInt64(uint64_t);
   static String16 fromDouble(double);
   static String16 fromDouble(double, int precision);
 
   int64_t toInteger64(bool* ok = nullptr) const;
+  uint64_t toUInt64(bool* ok = nullptr) const;
   int toInteger(bool* ok = nullptr) const;
+  std::pair<size_t, size_t> getTrimmedOffsetAndLength() const;
   String16 stripWhiteSpace() const;
   const UChar* characters16() const { return m_impl.c_str(); }
   size_t length() const { return m_impl.length(); }
@@ -126,6 +131,7 @@ class String16Builder {
   void appendNumber(size_t);
   void appendUnsignedAsHex(uint64_t);
   void appendUnsignedAsHex(uint32_t);
+  void appendUnsignedAsHex(uint8_t);
   String16 toString();
   void reserveCapacity(size_t);
 

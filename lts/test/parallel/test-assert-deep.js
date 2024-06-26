@@ -1,6 +1,6 @@
 'use strict';
 
-require('../common');
+const common = require('../common');
 const assert = require('assert');
 const util = require('util');
 const { AssertionError } = assert;
@@ -164,7 +164,7 @@ assert.throws(
     new Int32Array([1]), // Int32Array
     new Uint32Array([1]), // Uint32Array
     Buffer.from([1]), // Uint8Array
-    (function() { return arguments; })(1)
+    (function() { return arguments; })(1),
   ]);
 
   for (const a of similar) {
@@ -419,19 +419,31 @@ assertNotDeepOrStrict(
 // GH-14441. Circular structures should be consistent
 {
   const a = {};
-  const b = {};
   a.a = a;
+
+  const b = {};
   b.a = {};
   b.a.a = a;
+
   assertDeepAndStrictEqual(a, b);
 }
 
 {
+  const a = {};
+  a.a = a;
+  const b = {};
+  b.a = b;
+  const c = {};
+  c.a = a;
+  assertDeepAndStrictEqual(b, c);
+}
+
+{
   const a = new Set();
-  const b = new Set();
-  const c = new Set();
   a.add(a);
+  const b = new Set();
   b.add(b);
+  const c = new Set();
   c.add(a);
   assertDeepAndStrictEqual(b, c);
 }
@@ -524,7 +536,7 @@ assertNotDeepOrStrict(
     {
       code: 'ERR_ASSERTION',
       message: `${defaultMsgStartFull}\n\n` +
-               "  Map {\n+   1 => 1\n-   1 => '1'\n  }"
+               "  Map(1) {\n+   1 => 1\n-   1 => '1'\n  }"
     }
   );
 }
@@ -567,8 +579,10 @@ assertNotDeepOrStrict(
 
 // Handle sparse arrays.
 {
+  /* eslint-disable no-sparse-arrays */
   assertDeepAndStrictEqual([1, , , 3], [1, , , 3]);
   assertNotDeepOrStrict([1, , , 3], [1, , , 3, , , ]);
+  /* eslint-enable no-sparse-arrays */
   const a = new Array(3);
   const b = new Array(3);
   a[2] = true;
@@ -590,10 +604,9 @@ assertNotDeepOrStrict(
 }
 
 // Handle NaN
-assert.notDeepEqual(NaN, NaN);
-assert.deepStrictEqual(NaN, NaN);
-assert.deepStrictEqual({ a: NaN }, { a: NaN });
-assert.deepStrictEqual([ 1, 2, NaN, 4 ], [ 1, 2, NaN, 4 ]);
+assertDeepAndStrictEqual(NaN, NaN);
+assertDeepAndStrictEqual({ a: NaN }, { a: NaN });
+assertDeepAndStrictEqual([ 1, 2, NaN, 4 ], [ 1, 2, NaN, 4 ]);
 
 // Handle boxed primitives
 {
@@ -713,7 +726,7 @@ assertNotDeepOrStrict(/a/igm, /a/im);
 {
   const re1 = /a/g;
   re1.lastIndex = 3;
-  assert.deepEqual(re1, /a/g);
+  assert.notDeepEqual(re1, /a/g);
 }
 
 assert.deepEqual(4, '4');
@@ -853,15 +866,17 @@ assert.throws(
 {
   const re1 = /a/;
   re1.lastIndex = 3;
-  assert.deepStrictEqual(re1, /a/);
+  assert.notDeepStrictEqual(re1, /a/);
 }
 
 assert.throws(
+  // eslint-disable-next-line no-restricted-syntax
   () => assert.deepStrictEqual(4, '4'),
   { message: `${defaultMsgStart}\n4 !== '4'\n` }
 );
 
 assert.throws(
+  // eslint-disable-next-line no-restricted-syntax
   () => assert.deepStrictEqual(true, 1),
   { message: `${defaultMsgStart}\ntrue !== 1\n` }
 );
@@ -1096,6 +1111,29 @@ assert.throws(
   assert.notDeepStrictEqual(err, err2);
 }
 
+// Check for Errors with cause property
+{
+  const e1 = new Error('err', { cause: new Error('cause e1') });
+  const e2 = new Error('err', { cause: new Error('cause e2') });
+  assertNotDeepOrStrict(e1, e2, AssertionError);
+  assertNotDeepOrStrict(e1, new Error('err'), AssertionError);
+  assertDeepAndStrictEqual(e1, new Error('err', { cause: new Error('cause e1') }));
+}
+
+// Check for AggregateError
+{
+  const e1 = new Error('e1');
+  const e1duplicate = new Error('e1');
+  const e2 = new Error('e2');
+
+  const e3 = new AggregateError([e1duplicate, e2], 'Aggregate Error');
+  const e3duplicate = new AggregateError([e1, e2], 'Aggregate Error');
+  const e4 = new AggregateError([e1], 'Aggregate Error');
+  assertNotDeepOrStrict(e1, e3, AssertionError);
+  assertNotDeepOrStrict(e3, e4, AssertionError);
+  assertDeepAndStrictEqual(e3, e3duplicate);
+}
+
 // Verify that `valueOf` is not called for boxed primitives.
 {
   const a = new Number(5);
@@ -1122,7 +1160,7 @@ assert.throws(
     {
       code: 'ERR_ASSERTION',
       name: 'AssertionError',
-      message: /a: \[Getter: 5]\n-   a: \[Getter: 6]\n  /
+      message: /a: \[Getter: 5]\n- {3}a: \[Getter: 6]\n {2}/
     }
   );
 
@@ -1187,11 +1225,78 @@ assert.throws(
   });
   assertNotDeepOrStrict(a, b);
 
-  a = Object.create(null);
+  a = { __proto__: null };
   b = new RangeError('abc');
   Object.defineProperty(a, Symbol.toStringTag, {
     value: 'Error'
   });
   Object.setPrototypeOf(b, null);
   assertNotDeepOrStrict(a, b, assert.AssertionError);
+}
+
+{
+  // Verify commutativity
+  // Regression test for https://github.com/nodejs/node/issues/37710
+  const a = { x: 1 };
+  const b = { y: 1 };
+  Object.defineProperty(b, 'x', { value: 1 });
+
+  assertNotDeepOrStrict(a, b);
+}
+
+// eslint-disable-next-line node-core/crypto-check
+if (common.hasCrypto) {
+  const crypto = require('crypto');
+  const { subtle } = globalThis.crypto;
+
+  {
+    const a = crypto.createSecretKey(Buffer.alloc(1, 0));
+    const b = crypto.createSecretKey(Buffer.alloc(1, 1));
+
+    assertNotDeepOrStrict(a, b);
+  }
+
+  {
+    const a = crypto.createSecretKey(Buffer.alloc(0));
+    const b = crypto.createSecretKey(Buffer.alloc(0));
+
+    assertDeepAndStrictEqual(a, b);
+  }
+
+  (async () => {
+    {
+      const a = await subtle.importKey('raw', Buffer.alloc(1, 0), { name: 'HMAC', hash: 'SHA-256' }, true, ['sign']);
+      const b = await subtle.importKey('raw', Buffer.alloc(1, 1), { name: 'HMAC', hash: 'SHA-256' }, true, ['sign']);
+
+      assertNotDeepOrStrict(a, b);
+    }
+
+    {
+      const a = await subtle.importKey('raw', Buffer.alloc(1), { name: 'HMAC', hash: 'SHA-256' }, true, ['sign']);
+      const b = await subtle.importKey('raw', Buffer.alloc(1), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+
+      assertNotDeepOrStrict(a, b);
+    }
+
+    {
+      const a = await subtle.importKey('raw', Buffer.alloc(1), { name: 'HMAC', hash: 'SHA-256' }, true, ['sign']);
+      const b = await subtle.importKey('raw', Buffer.alloc(1), { name: 'HMAC', hash: 'SHA-384' }, true, ['sign']);
+
+      assertNotDeepOrStrict(a, b);
+    }
+
+    {
+      const a = await subtle.importKey('raw', Buffer.alloc(1), { name: 'HMAC', hash: 'SHA-256' }, true, ['sign']);
+      const b = await subtle.importKey('raw', Buffer.alloc(1), { name: 'HMAC', hash: 'SHA-256' }, true, ['verify']);
+
+      assertNotDeepOrStrict(a, b);
+    }
+
+    {
+      const a = await subtle.importKey('raw', Buffer.alloc(1), { name: 'HMAC', hash: 'SHA-256' }, true, ['sign']);
+      const b = await subtle.importKey('raw', Buffer.alloc(1), { name: 'HMAC', hash: 'SHA-256' }, true, ['sign']);
+
+      assertDeepAndStrictEqual(a, b);
+    }
+  })().then(common.mustCall());
 }

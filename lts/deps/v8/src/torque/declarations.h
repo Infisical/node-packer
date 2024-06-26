@@ -5,6 +5,7 @@
 #ifndef V8_TORQUE_DECLARATIONS_H_
 #define V8_TORQUE_DECLARATIONS_H_
 
+#include <memory>
 #include <string>
 
 #include "src/torque/declarable.h"
@@ -32,6 +33,15 @@ std::vector<T*> FilterDeclarables(const std::vector<Declarable*> list) {
   return result;
 }
 
+inline std::string UnwrapTNodeTypeName(const std::string& generates) {
+  if (generates.length() < 7 || generates.substr(0, 6) != "TNode<" ||
+      generates.substr(generates.length() - 1, 1) != ">") {
+    ReportError("generated type \"", generates,
+                "\" should be of the form \"TNode<...>\"");
+  }
+  return generates.substr(6, generates.length() - 7);
+}
+
 class Declarations {
  public:
   static std::vector<Declarable*> TryLookup(const QualifiedName& name) {
@@ -55,12 +65,13 @@ class Declarations {
     return d;
   }
 
-  static std::vector<Declarable*> LookupGlobalScope(const std::string& name);
+  static std::vector<Declarable*> LookupGlobalScope(const QualifiedName& name);
 
   static const TypeAlias* LookupTypeAlias(const QualifiedName& name);
   static const Type* LookupType(const QualifiedName& name);
   static const Type* LookupType(const Identifier* identifier);
-  static const Type* LookupGlobalType(const std::string& name);
+  static base::Optional<const Type*> TryLookupType(const QualifiedName& name);
+  static const Type* LookupGlobalType(const QualifiedName& name);
 
   static Builtin* FindSomeInternalBuiltinWithType(
       const BuiltinPointerType* type);
@@ -71,20 +82,20 @@ class Declarations {
                                const TypeVector& types);
   static base::Optional<Builtin*> TryLookupBuiltin(const QualifiedName& name);
 
-  static std::vector<Generic*> LookupGeneric(const std::string& name);
-  static Generic* LookupUniqueGeneric(const QualifiedName& name);
+  static std::vector<GenericCallable*> LookupGeneric(const std::string& name);
+  static GenericCallable* LookupUniqueGeneric(const QualifiedName& name);
 
-  static GenericStructType* LookupUniqueGenericStructType(
-      const QualifiedName& name);
-  static base::Optional<GenericStructType*> TryLookupGenericStructType(
+  static GenericType* LookupUniqueGenericType(const QualifiedName& name);
+  static GenericType* LookupGlobalUniqueGenericType(const std::string& name);
+  static base::Optional<GenericType*> TryLookupGenericType(
       const QualifiedName& name);
 
   static Namespace* DeclareNamespace(const std::string& name);
   static TypeAlias* DeclareType(const Identifier* name, const Type* type);
 
-  static const TypeAlias* PredeclareTypeAlias(const Identifier* name,
-                                              TypeDeclaration* type,
-                                              bool redeclaration);
+  static TypeAlias* PredeclareTypeAlias(const Identifier* name,
+                                        TypeDeclaration* type,
+                                        bool redeclaration);
   static TorqueMacro* CreateTorqueMacro(std::string external_name,
                                         std::string readable_name,
                                         bool exported_to_csa,
@@ -112,25 +123,27 @@ class Declarations {
 
   static Builtin* CreateBuiltin(std::string external_name,
                                 std::string readable_name, Builtin::Kind kind,
-                                Signature signature,
+                                Builtin::Flags flags, Signature signature,
                                 base::Optional<Statement*> body);
   static Builtin* DeclareBuiltin(const std::string& name, Builtin::Kind kind,
+                                 Builtin::Flags flags,
                                  const Signature& signature,
                                  base::Optional<Statement*> body);
 
   static RuntimeFunction* DeclareRuntimeFunction(const std::string& name,
                                                  const Signature& signature);
 
-  static void DeclareExternConstant(Identifier* name, const Type* type,
-                                    std::string value);
+  static ExternConstant* DeclareExternConstant(Identifier* name,
+                                               const Type* type,
+                                               std::string value);
   static NamespaceConstant* DeclareNamespaceConstant(Identifier* name,
                                                      const Type* type,
                                                      Expression* body);
 
-  static Generic* DeclareGeneric(const std::string& name,
-                                 GenericDeclaration* generic);
-  static GenericStructType* DeclareGenericStructType(const std::string& name,
-                                                     StructDeclaration* decl);
+  static GenericCallable* DeclareGenericCallable(
+      const std::string& name, GenericCallableDeclaration* ast_node);
+  static GenericType* DeclareGenericType(const std::string& name,
+                                         GenericTypeDeclaration* ast_node);
 
   template <class T>
   static T* Declare(const std::string& name, T* d) {

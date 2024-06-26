@@ -32,20 +32,21 @@ const fixtures = require('../common/fixtures');
 const workerCount = 4;
 const expectedReqCount = 16;
 
-if (cluster.isMaster) {
+if (cluster.isPrimary) {
+  let listeningCount = 0;
   let reusedCount = 0;
   let reqCount = 0;
   let lastSession = null;
-  let shootOnce = false;
   let workerPort = null;
 
   function shoot() {
-    console.error('[master] connecting', workerPort, 'session?', !!lastSession);
+    console.error('[primary] connecting',
+                  workerPort, 'session?', !!lastSession);
     const c = tls.connect(workerPort, {
       session: lastSession,
       rejectUnauthorized: false
     }, () => {
-      c.end();
+      c.on('end', c.end);
     }).on('close', () => {
       // Wait for close to shoot off another connection. We don't want to shoot
       // until a new session is allocated, if one will be. The new session is
@@ -69,18 +70,17 @@ if (cluster.isMaster) {
   function fork() {
     const worker = cluster.fork();
     worker.on('message', ({ msg, port }) => {
-      console.error('[master] got %j', msg);
+      console.error('[primary] got %j', msg);
       if (msg === 'reused') {
         ++reusedCount;
-      } else if (msg === 'listening' && !shootOnce) {
-        workerPort = port || workerPort;
-        shootOnce = true;
+      } else if (msg === 'listening' && ++listeningCount === workerCount) {
+        workerPort = port;
         shoot();
       }
     });
 
     worker.on('exit', () => {
-      console.error('[master] worker died');
+      console.error('[primary] worker died');
     });
   }
   for (let i = 0; i < workerCount; i++) {

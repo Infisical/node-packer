@@ -5,12 +5,12 @@
 #ifndef V8_TORQUE_DECLARATION_VISITOR_H_
 #define V8_TORQUE_DECLARATION_VISITOR_H_
 
-#include <set>
 #include <string>
 
 #include "src/base/macros.h"
 #include "src/torque/declarations.h"
 #include "src/torque/global-context.h"
+#include "src/torque/kythe-data.h"
 #include "src/torque/types.h"
 #include "src/torque/utils.h"
 
@@ -35,17 +35,30 @@ class PredeclarationVisitor {
     for (Declaration* child : decl->declarations) Predeclare(child);
   }
   static void Predeclare(TypeDeclaration* decl) {
-    Declarations::PredeclareTypeAlias(decl->name, decl, false);
-  }
-  static void Predeclare(StructDeclaration* decl) {
-    if (decl->IsGeneric()) {
-      Declarations::DeclareGenericStructType(decl->name->value, decl);
-    } else {
-      Declarations::PredeclareTypeAlias(decl->name, decl, false);
+    TypeAlias* alias =
+        Declarations::PredeclareTypeAlias(decl->name, decl, false);
+    alias->SetPosition(decl->pos);
+    alias->SetIdentifierPosition(decl->name->pos);
+    if (GlobalContext::collect_kythe_data()) {
+      KytheData::AddTypeDefinition(alias);
     }
   }
-  static void Predeclare(GenericDeclaration* decl) {
-    Declarations::DeclareGeneric(decl->declaration->name->value, decl);
+  static void Predeclare(StructDeclaration* decl) {
+    TypeAlias* alias =
+        Declarations::PredeclareTypeAlias(decl->name, decl, false);
+    alias->SetPosition(decl->pos);
+    alias->SetIdentifierPosition(decl->name->pos);
+    if (GlobalContext::collect_kythe_data()) {
+      KytheData::AddTypeDefinition(alias);
+    }
+  }
+  static void Predeclare(GenericTypeDeclaration* generic_decl) {
+    Declarations::DeclareGenericType(generic_decl->declaration->name->value,
+                                     generic_decl);
+  }
+  static void Predeclare(GenericCallableDeclaration* generic_decl) {
+    Declarations::DeclareGenericCallable(generic_decl->declaration->name->value,
+                                         generic_decl);
   }
 };
 
@@ -67,9 +80,7 @@ class DeclarationVisitor {
     Declarations::LookupType(decl->name);
   }
   static void Visit(StructDeclaration* decl) {
-    if (!decl->IsGeneric()) {
-      Declarations::LookupType(decl->name);
-    }
+    Declarations::LookupType(decl->name);
   }
 
   static Builtin* CreateBuiltin(BuiltinDeclaration* decl,
@@ -85,7 +96,10 @@ class DeclarationVisitor {
   static void Visit(IntrinsicDeclaration* decl);
 
   static void Visit(ConstDeclaration* decl);
-  static void Visit(GenericDeclaration* decl) {
+  static void Visit(GenericCallableDeclaration* decl) {
+    // The PredeclarationVisitor already handled this case.
+  }
+  static void Visit(GenericTypeDeclaration* decl) {
     // The PredeclarationVisitor already handled this case.
   }
   static void Visit(SpecializationDeclaration* decl);
@@ -93,15 +107,18 @@ class DeclarationVisitor {
   static void Visit(CppIncludeDeclaration* decl);
 
   static Signature MakeSpecializedSignature(
-      const SpecializationKey<Generic>& key);
-  static Callable* SpecializeImplicit(const SpecializationKey<Generic>& key);
+      const SpecializationKey<GenericCallable>& key);
+  static Callable* SpecializeImplicit(
+      const SpecializationKey<GenericCallable>& key);
   static Callable* Specialize(
-      const SpecializationKey<Generic>& key, CallableDeclaration* declaration,
+      const SpecializationKey<GenericCallable>& key,
+      CallableDeclaration* declaration,
       base::Optional<const SpecializationDeclaration*> explicit_specialization,
       base::Optional<Statement*> body, SourcePosition position);
 
  private:
-  static void DeclareSpecializedTypes(const SpecializationKey<Generic>& key);
+  static void DeclareSpecializedTypes(
+      const SpecializationKey<GenericCallable>& key);
 };
 
 }  // namespace torque

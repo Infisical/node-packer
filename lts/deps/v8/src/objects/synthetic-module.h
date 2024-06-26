@@ -13,6 +13,8 @@
 namespace v8 {
 namespace internal {
 
+#include "torque-generated/src/objects/synthetic-module-tq.inc"
+
 // The runtime representation of a Synthetic Module Record, a module that can be
 // instantiated by an embedder with embedder-defined exports and evaluation
 // steps.
@@ -22,7 +24,6 @@ class SyntheticModule
  public:
   NEVER_READ_ONLY_SPACE
   DECL_VERIFIER(SyntheticModule)
-  DECL_PRINTER(SyntheticModule)
 
   // Set module's exported value for the specified export_name to the specified
   // export_value.  An error will be thrown if export_name is not one
@@ -40,9 +41,9 @@ class SyntheticModule
                               Handle<String> export_name,
                               Handle<Object> export_value);
 
-  using BodyDescriptor = SubclassBodyDescriptor<
-      Module::BodyDescriptor,
-      FixedBodyDescriptor<kExportNamesOffset, kSize, kSize>>;
+  using BodyDescriptor =
+      SubclassBodyDescriptor<Module::BodyDescriptor,
+                             FixedBodyDescriptor<kNameOffset, kSize, kSize>>;
 
  private:
   friend class Module;
@@ -54,7 +55,7 @@ class SyntheticModule
 
   static V8_WARN_UNUSED_RESULT bool PrepareInstantiate(
       Isolate* isolate, Handle<SyntheticModule> module,
-      v8::Local<v8::Context> context, v8::Module::ResolveCallback callback);
+      v8::Local<v8::Context> context);
   static V8_WARN_UNUSED_RESULT bool FinishInstantiate(
       Isolate* isolate, Handle<SyntheticModule> module);
 

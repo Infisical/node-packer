@@ -23,51 +23,62 @@
 
 const {
   ArrayIsArray,
+  ArrayPrototypeIncludes,
+  ArrayPrototypeIndexOf,
+  ArrayPrototypePush,
   Boolean,
-  Error,
+  FunctionPrototypeBind,
+  FunctionPrototypeCall,
+  MathMax,
   Number,
   NumberIsNaN,
+  NumberParseInt,
   ObjectDefineProperty,
   ObjectSetPrototypeOf,
   Symbol,
+  SymbolAsyncDispose,
+  SymbolDispose,
 } = primordials;
 
 const EventEmitter = require('events');
+const { addAbortListener } = require('internal/events/abort_listener');
 const stream = require('stream');
-const { inspect } = require('internal/util/inspect');
-const debug = require('internal/util/debuglog').debuglog('net');
-const { deprecate } = require('internal/util');
+let debug = require('internal/util/debuglog').debuglog('net', (fn) => {
+  debug = fn;
+});
 const {
+  kReinitializeHandle,
   isIP,
   isIPv4,
   isIPv6,
   normalizedArgsSymbol,
-  makeSyncWrite
+  makeSyncWrite,
 } = require('internal/net');
 const assert = require('internal/assert');
 const {
   UV_EADDRINUSE,
   UV_EINVAL,
-  UV_ENOTCONN
+  UV_ENOTCONN,
+  UV_ECANCELED,
+  UV_ETIMEDOUT,
 } = internalBinding('uv');
 
 const { Buffer } = require('buffer');
-const { guessHandleType } = internalBinding('util');
 const { ShutdownWrap } = internalBinding('stream_wrap');
 const {
   TCP,
   TCPConnectWrap,
-  constants: TCPConstants
+  constants: TCPConstants,
 } = internalBinding('tcp_wrap');
 const {
   Pipe,
   PipeConnectWrap,
-  constants: PipeConstants
+  constants: PipeConstants,
 } = internalBinding('pipe_wrap');
 const {
   newAsyncId,
   defaultTriggerAsyncIdScope,
-  symbols: { async_id_symbol, owner_symbol }
+  symbols: { async_id_symbol, owner_symbol },
 } = require('internal/async_hooks');
 const {
   writevGeneric,
@@ -79,7 +90,7 @@ const {
   setStreamTimeout,
   kBuffer,
   kBufferCb,
-  kBufferGen
+  kBufferGen,
 } = require('internal/stream_base_commons');
 const {
   codes: {
@@ -88,32 +99,44 @@ const {
     ERR_INVALID_ARG_VALUE,
     ERR_INVALID_FD_TYPE,
     ERR_INVALID_IP_ADDRESS,
-    ERR_INVALID_OPT_VALUE,
+    ERR_INVALID_HANDLE_TYPE,
     ERR_SERVER_ALREADY_LISTEN,
     ERR_SERVER_NOT_RUNNING,
-    ERR_SOCKET_CLOSED
+    ERR_SOCKET_CONNECTION_TIMEOUT,
+    ERR_SOCKET_CLOSED,
+    ERR_SOCKET_CLOSED_BEFORE_CONNECTION,
+    ERR_MISSING_ARGS,
   },
-  errnoException,
-  exceptionWithHostPort,
-  uvExceptionWithHostPort
+  ErrnoException,
+  ExceptionWithHostPort,
+  genericNodeError,
+  NodeAggregateError,
+  UVExceptionWithHostPort,
 } = require('internal/errors');
 const { isUint8Array } = require('internal/util/types');
+const { queueMicrotask } = require('internal/process/task_queues');
+const { kEmptyObject, guessHandleType, promisify } = require('internal/util');
 const {
+  validateAbortSignal,
+  validateBoolean,
+  validateFunction,
   validateInt32,
+  validateNumber,
   validatePort,
-  validateString
+  validateString,
 } = require('internal/validators');
 const kLastWriteQueueSize = Symbol('lastWriteQueueSize');
-const {
-  DTRACE_NET_SERVER_CONNECTION,
-  DTRACE_NET_STREAM_END
-} = require('internal/dtrace');
+const { getOptionValue } = require('internal/options');
 
 // Lazy loaded to improve startup performance.
 let cluster;
 let dns;
+let BlockList;
+let SocketAddress;
+let autoSelectFamilyDefault = getOptionValue('--network-family-autoselection');
+let autoSelectFamilyAttemptTimeoutDefault = getOptionValue('--network-family-autoselection-attempt-timeout');
 
-const { clearTimeout } = require('timers');
+const { clearTimeout, setTimeout } = require('timers');
 const { kTimeout } = require('internal/timers');
 
 const DEFAULT_IPV4_ADDR = '0.0.0.0';
@@ -121,7 +144,20 @@ const DEFAULT_IPV6_ADDR = '::';
 
 const isWindows = process.platform === 'win32';
 
-function noop() {}
+const noop = () => {};
+
+const kPerfHooksNetConnectContext = Symbol('kPerfHooksNetConnectContext');
+
+const dc = require('diagnostics_channel');
+const netClientSocketChannel = dc.channel('net.client.socket');
+const netServerSocketChannel = dc.channel('net.server.socket');
+
+const {
+  hasObserver,
+  startPerf,
+  stopPerf,
+} = require('internal/perf/observe');
+const { getDefaultHighWaterMark } = require('internal/streams/state');
 
 function getFlags(ipv6Only) {
   return ipv6Only === true ? TCPConstants.UV_TCP_IPV6ONLY : 0;
@@ -132,13 +168,13 @@ function createHandle(fd, is_server) {
   const type = guessHandleType(fd);
   if (type === 'PIPE') {
     return new Pipe(
-      is_server ? PipeConstants.SERVER : PipeConstants.SOCKET
+      is_server ? PipeConstants.SERVER : PipeConstants.SOCKET,
     );
   }
 
   if (type === 'TCP') {
     return new TCP(
-      is_server ? TCPConstants.SERVER : TCPConstants.SOCKET
+      is_server ? TCPConstants.SERVER : TCPConstants.SOCKET,
     );
   }
 
@@ -155,6 +191,16 @@ function getNewAsyncId(handle) {
 function isPipeName(s) {
   return typeof s === 'string' && toNumber(s) === false;
 }
+
+/**
+ * Creates a new TCP or IPC server
+ * @param {{
+ *   allowHalfOpen?: boolean;
+ *   pauseOnConnect?: boolean;
+ *   }} [options]
+ * @param {Function} [connectionListener]
+ * @returns {Server}
+ */
 
 function createServer(options, connectionListener) {
   return new Server(options, connectionListener);
@@ -179,6 +225,11 @@ function connect(...args) {
   debug('createConnection', normalized);
   const socket = new Socket(options);
 
+  if (netClientSocketChannel.hasSubscribers) {
+    netClientSocketChannel.publish({
+      socket,
+    });
+  }
   if (options.timeout) {
     socket.setTimeout(options.timeout);
   }
@@ -186,6 +237,28 @@ function connect(...args) {
   return socket.connect(normalized);
 }
 
+function getDefaultAutoSelectFamily() {
+  return autoSelectFamilyDefault;
+}
+
+function setDefaultAutoSelectFamily(value) {
+  validateBoolean(value, 'value');
+  autoSelectFamilyDefault = value;
+}
+
+function getDefaultAutoSelectFamilyAttemptTimeout() {
+  return autoSelectFamilyAttemptTimeoutDefault;
+}
+
+function setDefaultAutoSelectFamilyAttemptTimeout(value) {
+  validateInt32(value, 'value', 1);
+
+  if (value < 10) {
+    value = 10;
+  }
+
+  autoSelectFamilyAttemptTimeoutDefault = value;
+}
 
 // Returns an array [options, cb], where options is an object,
 // cb is either a function or null.
@@ -258,13 +331,52 @@ function initSocketHandle(self) {
   }
 }
 
+function closeSocketHandle(self, isException, isCleanupPending = false) {
+  if (self._handle) {
+    self._handle.close(() => {
+      debug('emit close');
+      self.emit('close', isException);
+      if (isCleanupPending) {
+        self._handle.onread = noop;
+        self._handle = null;
+        self._sockname = null;
+      }
+    });
+  }
+}
 
 const kBytesRead = Symbol('kBytesRead');
 const kBytesWritten = Symbol('kBytesWritten');
 const kSetNoDelay = Symbol('kSetNoDelay');
+const kSetKeepAlive = Symbol('kSetKeepAlive');
+const kSetKeepAliveInitialDelay = Symbol('kSetKeepAliveInitialDelay');
 
 function Socket(options) {
   if (!(this instanceof Socket)) return new Socket(options);
+  if (options?.objectMode) {
+    throw new ERR_INVALID_ARG_VALUE(
+      'options.objectMode',
+      options.objectMode,
+      'is not supported',
+    );
+  } else if (options?.readableObjectMode || options?.writableObjectMode) {
+    throw new ERR_INVALID_ARG_VALUE(
+      `options.${
+        options.readableObjectMode ? 'readableObjectMode' : 'writableObjectMode'
+      }`,
+      options.readableObjectMode || options.writableObjectMode,
+      'is not supported',
+    );
+  }
+  if (typeof options?.keepAliveInitialDelay !== 'undefined') {
+    validateNumber(
+      options?.keepAliveInitialDelay, 'options.keepAliveInitialDelay',
+    );
+
+    if (options.keepAliveInitialDelay < 0) {
+      options.keepAliveInitialDelay = 0;
+    }
+  }
 
   this.connecting = false;
   // Problem with this is that users can supply their own handle, that may not
@@ -275,86 +387,84 @@ function Socket(options) {
   this[kHandle] = null;
   this._parent = null;
   this._host = null;
-  this[kSetNoDelay] = false;
   this[kLastWriteQueueSize] = 0;
   this[kTimeout] = null;
   this[kBuffer] = null;
   this[kBufferCb] = null;
   this[kBufferGen] = null;
+  this._closeAfterHandlingError = false;
 
   if (typeof options === 'number')
     options = { fd: options }; // Legacy interface.
   else
     options = { ...options };
 
-  options.readable = options.readable || false;
-  options.writable = options.writable || false;
-  const { allowHalfOpen } = options;
-
-  // Prevent the "no-half-open enforcer" from being inherited from `Duplex`.
-  options.allowHalfOpen = true;
+  // Default to *not* allowing half open sockets.
+  options.allowHalfOpen = Boolean(options.allowHalfOpen);
   // For backwards compat do not emit close on destroy.
   options.emitClose = false;
+  options.autoDestroy = true;
   // Handle strings directly.
   options.decodeStrings = false;
   stream.Duplex.call(this, options);
 
-  // Default to *not* allowing half open sockets.
-  this.allowHalfOpen = Boolean(allowHalfOpen);
-
   if (options.handle) {
     this._handle = options.handle; // private
     this[async_id_symbol] = getNewAsyncId(this._handle);
-  } else {
-    const onread = options.onread;
-    if (onread !== null && typeof onread === 'object' &&
-        (isUint8Array(onread.buffer) || typeof onread.buffer === 'function') &&
-        typeof onread.callback === 'function') {
-      if (typeof onread.buffer === 'function') {
-        this[kBuffer] = true;
-        this[kBufferGen] = onread.buffer;
-      } else {
-        this[kBuffer] = onread.buffer;
-      }
-      this[kBufferCb] = onread.callback;
-    }
-    if (options.fd !== undefined) {
-      const { fd } = options;
-      let err;
+  } else if (options.fd !== undefined) {
+    const { fd } = options;
+    let err;
 
-      // createHandle will throw ERR_INVALID_FD_TYPE if `fd` is not
-      // a valid `PIPE` or `TCP` descriptor
-      this._handle = createHandle(fd, false);
+    // createHandle will throw ERR_INVALID_FD_TYPE if `fd` is not
+    // a valid `PIPE` or `TCP` descriptor
+    this._handle = createHandle(fd, false);
 
-      err = this._handle.open(fd);
+    err = this._handle.open(fd);
 
-      // While difficult to fabricate, in some architectures
-      // `open` may return an error code for valid file descriptors
-      // which cannot be opened. This is difficult to test as most
-      // un-openable fds will throw on `createHandle`
+    // While difficult to fabricate, in some architectures
+    // `open` may return an error code for valid file descriptors
+    // which cannot be opened. This is difficult to test as most
+    // un-openable fds will throw on `createHandle`
+    if (err)
+      throw new ErrnoException(err, 'open');
+
+    this[async_id_symbol] = this._handle.getAsyncId();
+
+    if ((fd === 1 || fd === 2) &&
+        (this._handle instanceof Pipe) && isWindows) {
+      // Make stdout and stderr blocking on Windows
+      err = this._handle.setBlocking(true);
       if (err)
-        throw errnoException(err, 'open');
+        throw new ErrnoException(err, 'setBlocking');
 
-      this[async_id_symbol] = this._handle.getAsyncId();
-
-      if ((fd === 1 || fd === 2) &&
-          (this._handle instanceof Pipe) && isWindows) {
-        // Make stdout and stderr blocking on Windows
-        err = this._handle.setBlocking(true);
-        if (err)
-          throw errnoException(err, 'setBlocking');
-
-        this._writev = null;
-        this._write = makeSyncWrite(fd);
-        // makeSyncWrite adjusts this value like the original handle would, so
-        // we need to let it do that by turning it into a writable, own
-        // property.
-        ObjectDefineProperty(this._handle, 'bytesWritten', {
-          value: 0, writable: true
-        });
-      }
+      this._writev = null;
+      this._write = makeSyncWrite(fd);
+      // makeSyncWrite adjusts this value like the original handle would, so
+      // we need to let it do that by turning it into a writable, own
+      // property.
+      ObjectDefineProperty(this._handle, 'bytesWritten', {
+        __proto__: null,
+        value: 0, writable: true,
+      });
     }
   }
+
+  const onread = options.onread;
+  if (onread !== null && typeof onread === 'object' &&
+      (isUint8Array(onread.buffer) || typeof onread.buffer === 'function') &&
+      typeof onread.callback === 'function') {
+    if (typeof onread.buffer === 'function') {
+      this[kBuffer] = true;
+      this[kBufferGen] = onread.buffer;
+    } else {
+      this[kBuffer] = onread.buffer;
+    }
+    this[kBufferCb] = onread.callback;
+  }
+
+  this[kSetNoDelay] = Boolean(options.noDelay);
+  this[kSetKeepAlive] = Boolean(options.keepAlive);
+  this[kSetKeepAliveInitialDelay] = ~~(options.keepAliveInitialDelay / 1000);
 
   // Shut down the socket when we're finished with it.
   this.on('end', onReadableStreamEnd);
@@ -375,6 +485,10 @@ function Socket(options) {
     } else if (!options.manualStart) {
       this.read(0);
     }
+  }
+
+  if (options.signal) {
+    addClientAbortSignalOption(this, options);
   }
 
   // Reserve properties
@@ -418,46 +532,40 @@ Socket.prototype._final = function(cb) {
   const err = this._handle.shutdown(req);
 
   if (err === 1 || err === UV_ENOTCONN)  // synchronous finish
-    return afterShutdown.call(req, 0);
+    return cb();
   else if (err !== 0)
-    return this.destroy(errnoException(err, 'shutdown'));
+    return cb(new ErrnoException(err, 'shutdown'));
 };
 
-
-function afterShutdown(status) {
+function afterShutdown() {
   const self = this.handle[owner_symbol];
 
-  debug('afterShutdown destroyed=%j', self.destroyed,
-        self._readableState);
+  debug('afterShutdown destroyed=%j', self.destroyed);
 
   this.callback();
-
-  // Callback may come after call to destroy.
-  if (self.destroyed)
-    return;
-
-  if (!self.readable || self.readableEnded) {
-    debug('readableState ended, destroying');
-    self.destroy();
-  }
 }
 
 // Provide a better error message when we call end() as a result
 // of the other side sending a FIN.  The standard 'write after end'
 // is overly vague, and makes it seem like the user's code is to blame.
 function writeAfterFIN(chunk, encoding, cb) {
+  if (!this.writableEnded) {
+    return stream.Duplex.prototype.write.call(this, chunk, encoding, cb);
+  }
+
   if (typeof encoding === 'function') {
     cb = encoding;
     encoding = null;
   }
 
-  // eslint-disable-next-line no-restricted-syntax
-  const er = new Error('This socket has been ended by the other party');
-  er.code = 'EPIPE';
-  process.nextTick(emitErrorNT, this, er);
+  const er = genericNodeError(
+    'This socket has been ended by the other party',
+    { code: 'EPIPE' },
+  );
   if (typeof cb === 'function') {
     defaultTriggerAsyncIdScope(this[async_id_symbol], process.nextTick, cb, er);
   }
+  this.destroy(er);
 
   return false;
 }
@@ -484,31 +592,47 @@ Socket.prototype._onTimeout = function() {
 
 
 Socket.prototype.setNoDelay = function(enable) {
+  // Backwards compatibility: assume true when `enable` is omitted
+  enable = Boolean(enable === undefined ? true : enable);
+
   if (!this._handle) {
-    this.once('connect',
-              enable ? this.setNoDelay : () => this.setNoDelay(enable));
+    this[kSetNoDelay] = enable;
     return this;
   }
 
-  // Backwards compatibility: assume true when `enable` is omitted
-  const newValue = enable === undefined ? true : !!enable;
-  if (this._handle.setNoDelay && newValue !== this[kSetNoDelay]) {
-    this[kSetNoDelay] = newValue;
-    this._handle.setNoDelay(newValue);
+  if (this._handle.setNoDelay && enable !== this[kSetNoDelay]) {
+    this[kSetNoDelay] = enable;
+    this._handle.setNoDelay(enable);
   }
 
   return this;
 };
 
 
-Socket.prototype.setKeepAlive = function(setting, msecs) {
+Socket.prototype.setKeepAlive = function(enable, initialDelayMsecs) {
+  enable = Boolean(enable);
+  const initialDelay = ~~(initialDelayMsecs / 1000);
+
   if (!this._handle) {
-    this.once('connect', () => this.setKeepAlive(setting, msecs));
+    this[kSetKeepAlive] = enable;
+    this[kSetKeepAliveInitialDelay] = initialDelay;
     return this;
   }
 
-  if (this._handle.setKeepAlive)
-    this._handle.setKeepAlive(setting, ~~(msecs / 1000));
+  if (!this._handle.setKeepAlive) {
+    return this;
+  }
+
+  if (enable !== this[kSetKeepAlive] ||
+      (
+        enable &&
+        this[kSetKeepAliveInitialDelay] !== initialDelay
+      )
+  ) {
+    this[kSetKeepAlive] = enable;
+    this[kSetKeepAliveInitialDelay] = initialDelay;
+    this._handle.setKeepAlive(enable, initialDelay);
+  }
 
   return this;
 };
@@ -520,20 +644,23 @@ Socket.prototype.address = function() {
 
 
 ObjectDefineProperty(Socket.prototype, '_connecting', {
+  __proto__: null,
   get: function() {
     return this.connecting;
-  }
+  },
 });
 
 ObjectDefineProperty(Socket.prototype, 'pending', {
+  __proto__: null,
   get() {
     return !this._handle || this.connecting;
   },
-  configurable: true
+  configurable: true,
 });
 
 
 ObjectDefineProperty(Socket.prototype, 'readyState', {
+  __proto__: null,
   get: function() {
     if (this.connecting) {
       return 'opening';
@@ -545,22 +672,24 @@ ObjectDefineProperty(Socket.prototype, 'readyState', {
       return 'writeOnly';
     }
     return 'closed';
-  }
+  },
 });
 
 
 ObjectDefineProperty(Socket.prototype, 'bufferSize', {
+  __proto__: null,
   get: function() {
     if (this._handle) {
-      return this[kLastWriteQueueSize] + this.writableLength;
+      return this.writableLength;
     }
-  }
+  },
 });
 
 ObjectDefineProperty(Socket.prototype, kUpdateTimer, {
+  __proto__: null,
   get: function() {
     return this._unrefTimer;
-  }
+  },
 });
 
 
@@ -570,12 +699,16 @@ function tryReadStart(socket) {
   socket._handle.reading = true;
   const err = socket._handle.readStart();
   if (err)
-    socket.destroy(errnoException(err, 'read'));
+    socket.destroy(new ErrnoException(err, 'read'));
 }
 
 // Just call handle.readStart until we have enough in the buffer
 Socket.prototype._read = function(n) {
-  debug('_read');
+  debug(
+    '_read - n', n,
+    'isConnecting?', !!this.connecting,
+    'hasHandle?', !!this._handle,
+  );
 
   if (this.connecting || !this._handle) {
     debug('_read wait for connection');
@@ -587,11 +720,26 @@ Socket.prototype._read = function(n) {
 
 
 Socket.prototype.end = function(data, encoding, callback) {
-  stream.Duplex.prototype.end.call(this, data, encoding, callback);
-  DTRACE_NET_STREAM_END(this);
+  stream.Duplex.prototype.end.call(this,
+                                   data, encoding, callback);
   return this;
 };
 
+Socket.prototype.resetAndDestroy = function() {
+  if (this._handle) {
+    if (!(this._handle instanceof TCP))
+      throw new ERR_INVALID_HANDLE_TYPE();
+    if (this.connecting) {
+      debug('reset wait for connection');
+      this.once('connect', () => this._reset());
+    } else {
+      this._reset();
+    }
+  } else {
+    this.destroy(new ERR_SOCKET_CLOSED());
+  }
+  return this;
+};
 
 Socket.prototype.pause = function() {
   if (this[kBuffer] && !this.connecting && this._handle &&
@@ -600,7 +748,7 @@ Socket.prototype.pause = function() {
     if (!this.destroyed) {
       const err = this._handle.readStop();
       if (err)
-        this.destroy(errnoException(err, 'read'));
+        this.destroy(new ErrnoException(err, 'read'));
     }
   }
   return stream.Duplex.prototype.pause.call(this);
@@ -629,12 +777,7 @@ Socket.prototype.read = function(n) {
 function onReadableStreamEnd() {
   if (!this.allowHalfOpen) {
     this.write = writeAfterFIN;
-    if (this.writable)
-      this.end();
-    else if (!this.writableLength)
-      this.destroy();
-  } else if (!this.destroyed && !this.writable && !this.writableLength)
-    this.destroy();
+  }
 }
 
 
@@ -654,8 +797,6 @@ Socket.prototype._destroy = function(exception, cb) {
 
   this.connecting = false;
 
-  this.readable = this.writable = false;
-
   for (let s = this; s !== null; s = s._parent) {
     clearTimeout(s[kTimeout]);
   }
@@ -669,13 +810,27 @@ Socket.prototype._destroy = function(exception, cb) {
     this[kBytesRead] = this._handle.bytesRead;
     this[kBytesWritten] = this._handle.bytesWritten;
 
-    this._handle.close(() => {
-      debug('emit close');
-      this.emit('close', isException);
-    });
-    this._handle.onread = noop;
-    this._handle = null;
-    this._sockname = null;
+    if (this.resetAndClosing) {
+      this.resetAndClosing = false;
+      const err = this._handle.reset(() => {
+        debug('emit close');
+        this.emit('close', isException);
+      });
+      if (err)
+        this.emit('error', new ErrnoException(err, 'reset'));
+    } else if (this._closeAfterHandlingError) {
+      // Enqueue closing the socket as a microtask, so that the socket can be
+      // accessible when an `error` event is handled in the `next tick queue`.
+      queueMicrotask(() => closeSocketHandle(this, isException, true));
+    } else {
+      closeSocketHandle(this, isException);
+    }
+
+    if (!this._closeAfterHandlingError) {
+      this._handle.onread = noop;
+      this._handle = null;
+      this._sockname = null;
+    }
     cb(exception);
   } else {
     cb(exception);
@@ -691,14 +846,19 @@ Socket.prototype._destroy = function(exception, cb) {
   }
 };
 
+Socket.prototype._reset = function() {
+  debug('reset connection');
+  this.resetAndClosing = true;
+  return this.destroy();
+};
+
 Socket.prototype._getpeername = function() {
-  if (!this._peername) {
-    if (!this._handle || !this._handle.getpeername) {
-      return {};
-    }
+  if (!this._handle || !this._handle.getpeername || this.connecting) {
+    return this._peername || {};
+  } else if (!this._peername) {
     const out = {};
     const err = this._handle.getpeername(out);
-    if (err) return {};  // FIXME(bnoordhuis) Throw?
+    if (err) return out;
     this._peername = out;
   }
   return this._peername;
@@ -706,9 +866,10 @@ Socket.prototype._getpeername = function() {
 
 function protoGetter(name, callback) {
   ObjectDefineProperty(Socket.prototype, name, {
+    __proto__: null,
     configurable: false,
     enumerable: true,
-    get: callback
+    get: callback,
   });
 }
 
@@ -732,12 +893,10 @@ protoGetter('remotePort', function remotePort() {
 Socket.prototype._getsockname = function() {
   if (!this._handle || !this._handle.getsockname) {
     return {};
-  }
-  if (!this._sockname) {
-    const out = {};
-    const err = this._handle.getsockname(out);
-    if (err) return {};  // FIXME(bnoordhuis) Throw?
-    this._sockname = out;
+  } else if (!this._sockname) {
+    this._sockname = {};
+    // FIXME(bnoordhuis) Throw when the return value is not 0?
+    this._handle.getsockname(this._sockname);
   }
   return this._sockname;
 };
@@ -752,6 +911,9 @@ protoGetter('localPort', function localPort() {
   return this._getsockname().port;
 });
 
+protoGetter('localFamily', function localFamily() {
+  return this._getsockname().family;
+});
 
 Socket.prototype[kAfterAsyncWrite] = function() {
   this[kLastWriteQueueSize] = 0;
@@ -765,8 +927,13 @@ Socket.prototype._writeGeneric = function(writev, data, encoding, cb) {
     this._pendingData = data;
     this._pendingEncoding = encoding;
     this.once('connect', function connect() {
+      this.off('close', onClose);
       this._writeGeneric(writev, data, encoding, cb);
     });
+    function onClose() {
+      cb(new ERR_SOCKET_CLOSED_BEFORE_CONNECTION());
+    }
+    this.once('close', onClose);
     return;
   }
   this._pendingData = null;
@@ -807,19 +974,18 @@ protoGetter('_bytesDispatched', function _bytesDispatched() {
 
 protoGetter('bytesWritten', function bytesWritten() {
   let bytes = this._bytesDispatched;
-  const state = this._writableState;
   const data = this._pendingData;
   const encoding = this._pendingEncoding;
+  const writableBuffer = this.writableBuffer;
 
-  if (!state)
+  if (!writableBuffer)
     return undefined;
 
-  this.writableBuffer.forEach(function(el) {
-    if (el.chunk instanceof Buffer)
-      bytes += el.chunk.length;
-    else
-      bytes += Buffer.byteLength(el.chunk, el.encoding);
-  });
+  for (const el of writableBuffer) {
+    bytes += el.chunk instanceof Buffer ?
+      el.chunk.length :
+      Buffer.byteLength(el.chunk, el.encoding);
+  }
 
   if (ArrayIsArray(data)) {
     // Was a writev, iterate over chunks to get total length
@@ -881,16 +1047,19 @@ function internalConnect(
       localAddress = localAddress || DEFAULT_IPV6_ADDR;
       err = self._handle.bind6(localAddress, localPort, flags);
     }
-    debug('binding to localAddress: %s and localPort: %d (addressType: %d)',
+    debug('connect: binding to localAddress: %s and localPort: %d (addressType: %d)',
           localAddress, localPort, addressType);
 
     err = checkBindError(err, localPort, self._handle);
     if (err) {
-      const ex = exceptionWithHostPort(err, 'bind', localAddress, localPort);
+      const ex = new ExceptionWithHostPort(err, 'bind', localAddress, localPort);
       self.destroy(ex);
       return;
     }
   }
+
+  debug('connect: attempting to connect to %s:%d (addressType: %d)', address, port, addressType);
+  self.emit('connectionAttempt', address, port, addressType);
 
   if (addressType === 6 || addressType === 4) {
     const req = new TCPConnectWrap();
@@ -899,6 +1068,7 @@ function internalConnect(
     req.port = port;
     req.localAddress = localAddress;
     req.localPort = localPort;
+    req.addressType = addressType;
 
     if (addressType === 4)
       err = self._handle.connect(req, address, port);
@@ -909,7 +1079,7 @@ function internalConnect(
     req.address = address;
     req.oncomplete = afterConnect;
 
-    err = self._handle.connect(req, address, afterConnect);
+    err = self._handle.connect(req, address);
   }
 
   if (err) {
@@ -920,11 +1090,109 @@ function internalConnect(
       details = sockname.address + ':' + sockname.port;
     }
 
-    const ex = exceptionWithHostPort(err, 'connect', address, port, details);
+    const ex = new ExceptionWithHostPort(err, 'connect', address, port, details);
     self.destroy(ex);
+  } else if ((addressType === 6 || addressType === 4) && hasObserver('net')) {
+    startPerf(self, kPerfHooksNetConnectContext, { type: 'net', name: 'connect', detail: { host: address, port } });
   }
 }
 
+
+function internalConnectMultiple(context, canceled) {
+  clearTimeout(context[kTimeout]);
+  const self = context.socket;
+
+  // We were requested to abort. Stop all operations
+  if (self._aborted) {
+    return;
+  }
+
+  // All connections have been tried without success, destroy with error
+  if (canceled || context.current === context.addresses.length) {
+    if (context.errors.length === 0) {
+      self.destroy(new ERR_SOCKET_CONNECTION_TIMEOUT());
+      return;
+    }
+
+    self.destroy(new NodeAggregateError(context.errors));
+    return;
+  }
+
+  assert(self.connecting);
+
+  const current = context.current++;
+
+  if (current > 0) {
+    self[kReinitializeHandle](new TCP(TCPConstants.SOCKET));
+  }
+
+  const { localPort, port, flags } = context;
+  const { address, family: addressType } = context.addresses[current];
+  let localAddress;
+  let err;
+
+  if (localPort) {
+    if (addressType === 4) {
+      localAddress = DEFAULT_IPV4_ADDR;
+      err = self._handle.bind(localAddress, localPort);
+    } else { // addressType === 6
+      localAddress = DEFAULT_IPV6_ADDR;
+      err = self._handle.bind6(localAddress, localPort, flags);
+    }
+
+    debug('connect/multiple: binding to localAddress: %s and localPort: %d (addressType: %d)',
+          localAddress, localPort, addressType);
+
+    err = checkBindError(err, localPort, self._handle);
+    if (err) {
+      ArrayPrototypePush(context.errors, new ExceptionWithHostPort(err, 'bind', localAddress, localPort));
+      internalConnectMultiple(context);
+      return;
+    }
+  }
+
+  debug('connect/multiple: attempting to connect to %s:%d (addressType: %d)', address, port, addressType);
+  self.emit('connectionAttempt', address, port, addressType);
+
+  const req = new TCPConnectWrap();
+  req.oncomplete = FunctionPrototypeBind(afterConnectMultiple, undefined, context, current);
+  req.address = address;
+  req.port = port;
+  req.localAddress = localAddress;
+  req.localPort = localPort;
+  req.addressType = addressType;
+
+  ArrayPrototypePush(self.autoSelectFamilyAttemptedAddresses, `${address}:${port}`);
+
+  if (addressType === 4) {
+    err = self._handle.connect(req, address, port);
+  } else {
+    err = self._handle.connect6(req, address, port);
+  }
+
+  if (err) {
+    const sockname = self._getsockname();
+    let details;
+
+    if (sockname) {
+      details = sockname.address + ':' + sockname.port;
+    }
+
+    const ex = new ExceptionWithHostPort(err, 'connect', address, port, details);
+    ArrayPrototypePush(context.errors, ex);
+
+    self.emit('connectionAttemptFailed', address, port, addressType, ex);
+    internalConnectMultiple(context);
+    return;
+  }
+
+  if (current < context.addresses.length - 1) {
+    debug('connect/multiple: setting the attempt timeout to %d ms', context.timeout);
+
+    // If the attempt has not returned an error, start the connection timer
+    context[kTimeout] = setTimeout(internalConnectMultipleTimeout, context.timeout, context, req, self._handle);
+  }
+}
 
 Socket.prototype.connect = function(...args) {
   let normalized;
@@ -939,6 +1207,19 @@ Socket.prototype.connect = function(...args) {
   }
   const options = normalized[0];
   const cb = normalized[1];
+
+  if (cb !== null) {
+    this.once('connect', cb);
+  }
+
+  // If the parent is already connecting, do not attempt to connect again
+  if (this._parent && this._parent.connecting) {
+    return this;
+  }
+
+  // options.port === null will be checked later.
+  if (options.port === undefined && options.path == null)
+    throw new ERR_MISSING_ARGS(['options', 'port', 'path']);
 
   if (this.write !== Socket.prototype.write)
     this.write = Socket.prototype.write;
@@ -960,19 +1241,14 @@ Socket.prototype.connect = function(...args) {
     initSocketHandle(this);
   }
 
-  if (cb !== null) {
-    this.once('connect', cb);
-  }
-
   this._unrefTimer();
 
   this.connecting = true;
-  this.writable = true;
 
   if (pipe) {
     validateString(path, 'options.path');
     defaultTriggerAsyncIdScope(
-      this[async_id_symbol], internalConnect, this, path
+      this[async_id_symbol], internalConnect, this, path,
     );
   } else {
     lookupAndConnect(this, options);
@@ -980,18 +1256,37 @@ Socket.prototype.connect = function(...args) {
   return this;
 };
 
+Socket.prototype[kReinitializeHandle] = function reinitializeHandle(handle) {
+  this._handle?.close();
+
+  this._handle = handle;
+  this._handle[owner_symbol] = this;
+
+  initSocketHandle(this);
+};
+
+function socketToDnsFamily(family) {
+  switch (family) {
+    case 'IPv4':
+      return 4;
+    case 'IPv6':
+      return 6;
+  }
+
+  return family;
+}
 
 function lookupAndConnect(self, options) {
   const { localAddress, localPort } = options;
   const host = options.host || 'localhost';
-  let { port } = options;
+  let { port, autoSelectFamilyAttemptTimeout, autoSelectFamily } = options;
 
   if (localAddress && !isIP(localAddress)) {
     throw new ERR_INVALID_IP_ADDRESS(localAddress);
   }
 
-  if (localPort && typeof localPort !== 'number') {
-    throw new ERR_INVALID_ARG_TYPE('options.localPort', 'number', localPort);
+  if (localPort) {
+    validateNumber(localPort, 'options.localPort');
   }
 
   if (typeof port !== 'undefined') {
@@ -1003,6 +1298,23 @@ function lookupAndConnect(self, options) {
   }
   port |= 0;
 
+
+  if (autoSelectFamily != null) {
+    validateBoolean(autoSelectFamily, 'options.autoSelectFamily');
+  } else {
+    autoSelectFamily = autoSelectFamilyDefault;
+  }
+
+  if (autoSelectFamilyAttemptTimeout != null) {
+    validateInt32(autoSelectFamilyAttemptTimeout, 'options.autoSelectFamilyAttemptTimeout', 1);
+
+    if (autoSelectFamilyAttemptTimeout < 10) {
+      autoSelectFamilyAttemptTimeout = 10;
+    }
+  } else {
+    autoSelectFamilyAttemptTimeout = autoSelectFamilyAttemptTimeoutDefault;
+  }
+
   // If host is an IP, skip performing a lookup
   const addressType = isIP(host);
   if (addressType) {
@@ -1011,21 +1323,19 @@ function lookupAndConnect(self, options) {
         defaultTriggerAsyncIdScope(
           self[async_id_symbol],
           internalConnect,
-          self, host, port, addressType, localAddress, localPort
+          self, host, port, addressType, localAddress, localPort,
         );
     });
     return;
   }
 
-  if (options.lookup && typeof options.lookup !== 'function')
-    throw new ERR_INVALID_ARG_TYPE('options.lookup',
-                                   'Function', options.lookup);
-
+  if (options.lookup != null)
+    validateFunction(options.lookup, 'options.lookup');
 
   if (dns === undefined) dns = require('dns');
   const dnsopts = {
-    family: options.family,
-    hints: options.hints || 0
+    family: socketToDnsFamily(options.family),
+    hints: options.hints || 0,
   };
 
   if (!isWindows &&
@@ -1039,6 +1349,29 @@ function lookupAndConnect(self, options) {
   debug('connect: dns options', dnsopts);
   self._host = host;
   const lookup = options.lookup || dns.lookup;
+
+  if (dnsopts.family !== 4 && dnsopts.family !== 6 && !localAddress && autoSelectFamily) {
+    debug('connect: autodetecting');
+
+    dnsopts.all = true;
+    defaultTriggerAsyncIdScope(self[async_id_symbol], function() {
+      lookupAndConnectMultiple(
+        self,
+        async_id_symbol,
+        lookup,
+        host,
+        options,
+        dnsopts,
+        port,
+        localAddress,
+        localPort,
+        autoSelectFamilyAttemptTimeout,
+      );
+    });
+
+    return;
+  }
+
   defaultTriggerAsyncIdScope(self[async_id_symbol], function() {
     lookup(host, dnsopts, function emitLookup(err, ip, addressType) {
       self.emit('lookup', err, ip, addressType, host);
@@ -1053,6 +1386,9 @@ function lookupAndConnect(self, options) {
         // calls net.Socket.connect() on it (that's us). There are no event
         // listeners registered yet so defer the error event to the next tick.
         process.nextTick(connectErrorNT, self, err);
+      } else if (!isIP(ip)) {
+        err = new ERR_INVALID_IP_ADDRESS(ip);
+        process.nextTick(connectErrorNT, self, err);
       } else if (addressType !== 4 && addressType !== 6) {
         err = new ERR_INVALID_ADDRESS_FAMILY(addressType,
                                              options.host,
@@ -1063,13 +1399,129 @@ function lookupAndConnect(self, options) {
         defaultTriggerAsyncIdScope(
           self[async_id_symbol],
           internalConnect,
-          self, ip, port, addressType, localAddress, localPort
+          self, ip, port, addressType, localAddress, localPort,
         );
       }
     });
   });
 }
 
+function lookupAndConnectMultiple(
+  self, async_id_symbol, lookup, host, options, dnsopts, port, localAddress, localPort, timeout,
+) {
+  defaultTriggerAsyncIdScope(self[async_id_symbol], function emitLookup() {
+    lookup(host, dnsopts, function emitLookup(err, addresses) {
+      // It's possible we were destroyed while looking this up.
+      // XXX it would be great if we could cancel the promise returned by
+      // the look up.
+      if (!self.connecting) {
+        return;
+      } else if (err) {
+        self.emit('lookup', err, undefined, undefined, host);
+
+        // net.createConnection() creates a net.Socket object and immediately
+        // calls net.Socket.connect() on it (that's us). There are no event
+        // listeners registered yet so defer the error event to the next tick.
+        process.nextTick(connectErrorNT, self, err);
+        return;
+      }
+
+      // Filter addresses by only keeping the one which are either IPv4 or IPV6.
+      // The first valid address determines which group has preference on the
+      // alternate family sorting which happens later.
+      const validAddresses = [[], []];
+      const validIps = [[], []];
+      let destinations;
+      for (let i = 0, l = addresses.length; i < l; i++) {
+        const address = addresses[i];
+        const { address: ip, family: addressType } = address;
+        self.emit('lookup', err, ip, addressType, host);
+        // It's possible we were destroyed while looking this up.
+        if (!self.connecting) {
+          return;
+        }
+        if (isIP(ip) && (addressType === 4 || addressType === 6)) {
+          if (!destinations) {
+            destinations = addressType === 6 ? { 6: 0, 4: 1 } : { 4: 0, 6: 1 };
+          }
+
+          const destination = destinations[addressType];
+
+          // Only try an address once
+          if (!ArrayPrototypeIncludes(validIps[destination], ip)) {
+            ArrayPrototypePush(validAddresses[destination], address);
+            ArrayPrototypePush(validIps[destination], ip);
+          }
+        }
+      }
+
+
+      // When no AAAA or A records are available, fail on the first one
+      if (!validAddresses[0].length && !validAddresses[1].length) {
+        const { address: firstIp, family: firstAddressType } = addresses[0];
+
+        if (!isIP(firstIp)) {
+          err = new ERR_INVALID_IP_ADDRESS(firstIp);
+          process.nextTick(connectErrorNT, self, err);
+        } else if (firstAddressType !== 4 && firstAddressType !== 6) {
+          err = new ERR_INVALID_ADDRESS_FAMILY(firstAddressType,
+                                               options.host,
+                                               options.port);
+          process.nextTick(connectErrorNT, self, err);
+        }
+
+        return;
+      }
+
+      // Sort addresses alternating families
+      const toAttempt = [];
+      for (let i = 0, l = MathMax(validAddresses[0].length, validAddresses[1].length); i < l; i++) {
+        if (i in validAddresses[0]) {
+          ArrayPrototypePush(toAttempt, validAddresses[0][i]);
+        }
+        if (i in validAddresses[1]) {
+          ArrayPrototypePush(toAttempt, validAddresses[1][i]);
+        }
+      }
+
+      if (toAttempt.length === 1) {
+        debug('connect/multiple: only one address found, switching back to single connection');
+        const { address: ip, family: addressType } = toAttempt[0];
+
+        self._unrefTimer();
+        defaultTriggerAsyncIdScope(
+          self[async_id_symbol],
+          internalConnect,
+          self,
+          ip,
+          port,
+          addressType,
+          localAddress,
+          localPort,
+        );
+
+        return;
+      }
+
+      self.autoSelectFamilyAttemptedAddresses = [];
+      debug('connect/multiple: will try the following addresses', toAttempt);
+
+      const context = {
+        socket: self,
+        addresses: toAttempt,
+        current: 0,
+        port,
+        localPort,
+        timeout,
+        [kTimeout]: null,
+        errors: [],
+      };
+
+      self._unrefTimer();
+      defaultTriggerAsyncIdScope(self[async_id_symbol], internalConnectMultiple, context);
+    });
+  });
+}
 
 function connectErrorNT(self, err) {
   self.destroy(err);
@@ -1119,10 +1571,22 @@ function afterConnect(status, handle, req, readable, writable) {
   self._sockname = null;
 
   if (status === 0) {
-    self.readable = readable;
-    if (!self._writableState.ended)
-      self.writable = writable;
+    if (self.readable && !readable) {
+      self.push(null);
+      self.read();
+    }
+    if (self.writable && !writable) {
+      self.end();
+    }
     self._unrefTimer();
+
+    if (self[kSetNoDelay] && self._handle.setNoDelay) {
+      self._handle.setNoDelay(true);
+    }
+
+    if (self[kSetKeepAlive] && self._handle.setKeepAlive) {
+      self._handle.setKeepAlive(true, self[kSetKeepAliveInitialDelay]);
+    }
 
     self.emit('connect');
     self.emit('ready');
@@ -1131,26 +1595,139 @@ function afterConnect(status, handle, req, readable, writable) {
     // this doesn't actually consume any bytes, because len=0.
     if (readable && !self.isPaused())
       self.read(0);
-
+    if (self[kPerfHooksNetConnectContext] && hasObserver('net')) {
+      stopPerf(self, kPerfHooksNetConnectContext);
+    }
   } else {
-    self.connecting = false;
     let details;
     if (req.localAddress && req.localPort) {
       details = req.localAddress + ':' + req.localPort;
     }
-    const ex = exceptionWithHostPort(status,
-                                     'connect',
-                                     req.address,
-                                     req.port,
-                                     details);
+    const ex = new ExceptionWithHostPort(status,
+                                         'connect',
+                                         req.address,
+                                         req.port,
+                                         details);
     if (details) {
       ex.localAddress = req.localAddress;
       ex.localPort = req.localPort;
     }
+
+    self.emit('connectionAttemptFailed', req.address, req.port, req.addressType, ex);
     self.destroy(ex);
   }
 }
 
+function addClientAbortSignalOption(self, options) {
+  validateAbortSignal(options.signal, 'options.signal');
+  const { signal } = options;
+  let disposable;
+
+  function onAbort() {
+    disposable?.[SymbolDispose]();
+    self._aborted = true;
+  }
+
+  if (signal.aborted) {
+    process.nextTick(onAbort);
+  } else {
+    process.nextTick(() => {
+      disposable = addAbortListener(signal, onAbort);
+    });
+  }
+}
+
+function createConnectionError(req, status) {
+  let details;
+
+  if (req.localAddress && req.localPort) {
+    details = req.localAddress + ':' + req.localPort;
+  }
+
+  const ex = new ExceptionWithHostPort(status,
+                                       'connect',
+                                       req.address,
+                                       req.port,
+                                       details);
+  if (details) {
+    ex.localAddress = req.localAddress;
+    ex.localPort = req.localPort;
+  }
+
+  return ex;
+}
+
+function afterConnectMultiple(context, current, status, handle, req, readable, writable) {
+  debug('connect/multiple: connection attempt to %s:%s completed with status %s', req.address, req.port, status);
+
+  // Make sure another connection is not spawned
+  clearTimeout(context[kTimeout]);
+
+  // One of the connection has completed and correctly dispatched but after timeout, ignore this one
+  if (status === 0 && current !== context.current - 1) {
+    debug('connect/multiple: ignoring successful but timedout connection to %s:%s', req.address, req.port);
+    handle.close();
+    return;
+  }
+
+  const self = context.socket;
+
+  // Some error occurred, add to the list of exceptions
+  if (status !== 0) {
+    const ex = createConnectionError(req, status);
+    ArrayPrototypePush(context.errors, ex);
+
+    self.emit('connectionAttemptFailed', req.address, req.port, req.addressType, ex);
+
+    // Try the next address, unless we were aborted
+    if (context.socket.connecting) {
+      internalConnectMultiple(context, status === UV_ECANCELED);
+    }
+
+    return;
+  }
+
+  if (hasObserver('net')) {
+    startPerf(
+      self,
+      kPerfHooksNetConnectContext,
+      { type: 'net', name: 'connect', detail: { host: req.address, port: req.port } },
+    );
+  }
+
+  afterConnect(status, self._handle, req, readable, writable);
+}
+
+function internalConnectMultipleTimeout(context, req, handle) {
+  debug('connect/multiple: connection to %s:%s timed out', req.address, req.port);
+  context.socket.emit('connectionAttemptTimeout', req.address, req.port, req.addressType);
+
+  req.oncomplete = undefined;
+  ArrayPrototypePush(context.errors, createConnectionError(req, UV_ETIMEDOUT));
+  handle.close();
+
+  // Try the next address, unless we were aborted
+  if (context.socket.connecting) {
+    internalConnectMultiple(context);
+  }
+}
+
+function addServerAbortSignalOption(self, options) {
+  if (options?.signal === undefined) {
+    return;
+  }
+  validateAbortSignal(options.signal, 'options.signal');
+  const { signal } = options;
+  const onAborted = () => {
+    self.close();
+  };
+  if (signal.aborted) {
+    process.nextTick(onAborted);
+  } else {
+    const disposable = addAbortListener(signal, onAborted);
+    self.once('close', disposable[SymbolDispose]);
+  }
+}
 
 function Server(options, connectionListener) {
   if (!(this instanceof Server))
@@ -1160,7 +1737,7 @@ function Server(options, connectionListener) {
 
   if (typeof options === 'function') {
     connectionListener = options;
-    options = {};
+    options = kEmptyObject;
     this.on('connection', connectionListener);
   } else if (options == null || typeof options === 'object') {
     options = { ...options };
@@ -1171,32 +1748,40 @@ function Server(options, connectionListener) {
   } else {
     throw new ERR_INVALID_ARG_TYPE('options', 'Object', options);
   }
+  if (typeof options.keepAliveInitialDelay !== 'undefined') {
+    validateNumber(
+      options.keepAliveInitialDelay, 'options.keepAliveInitialDelay',
+    );
+
+    if (options.keepAliveInitialDelay < 0) {
+      options.keepAliveInitialDelay = 0;
+    }
+  }
+  if (typeof options.highWaterMark !== 'undefined') {
+    validateNumber(
+      options.highWaterMark, 'options.highWaterMark',
+    );
+
+    if (options.highWaterMark < 0) {
+      options.highWaterMark = getDefaultHighWaterMark();
+    }
+  }
 
   this._connections = 0;
-
-  ObjectDefineProperty(this, 'connections', {
-    get: deprecate(() => {
-
-      if (this._usingWorkers) {
-        return null;
-      }
-      return this._connections;
-    }, 'Server.connections property is deprecated. ' +
-       'Use Server.getConnections method instead.', 'DEP0020'),
-    set: deprecate((val) => (this._connections = val),
-                   'Server.connections property is deprecated.',
-                   'DEP0020'),
-    configurable: true, enumerable: false
-  });
 
   this[async_id_symbol] = -1;
   this._handle = null;
   this._usingWorkers = false;
   this._workers = [];
   this._unref = false;
+  this._listeningId = 1;
 
   this.allowHalfOpen = options.allowHalfOpen || false;
   this.pauseOnConnect = !!options.pauseOnConnect;
+  this.noDelay = Boolean(options.noDelay);
+  this.keepAlive = Boolean(options.keepAlive);
+  this.keepAliveInitialDelay = ~~(options.keepAliveInitialDelay / 1000);
+  this.highWaterMark = options.highWaterMark ?? getDefaultHighWaterMark();
 }
 ObjectSetPrototypeOf(Server.prototype, EventEmitter.prototype);
 ObjectSetPrototypeOf(Server, EventEmitter);
@@ -1228,7 +1813,7 @@ function createServerHandle(address, port, addressType, fd, flags) {
   } else if (port === -1 && addressType === -1) {
     handle = new Pipe(PipeConstants.SERVER);
     if (isWindows) {
-      const instances = parseInt(process.env.NODE_PENDING_PIPE_INSTANCES);
+      const instances = NumberParseInt(process.env.NODE_PENDING_PIPE_INSTANCES);
       if (!NumberIsNaN(instances)) {
         handle.setPendingInstances(instances);
       }
@@ -1293,7 +1878,7 @@ function setupListenHandle(address, port, addressType, backlog, fd, flags) {
       rval = createServerHandle(address, port, addressType, fd, flags);
 
     if (typeof rval === 'number') {
-      const error = uvExceptionWithHostPort(rval, 'listen', address, port);
+      const error = new UVExceptionWithHostPort(rval, 'listen', address, port);
       process.nextTick(emitErrorNT, this, error);
       return;
     }
@@ -1310,7 +1895,7 @@ function setupListenHandle(address, port, addressType, backlog, fd, flags) {
   const err = this._handle.listen(backlog || 511);
 
   if (err) {
-    const ex = uvExceptionWithHostPort(err, 'listen', address, port);
+    const ex = new UVExceptionWithHostPort(err, 'listen', address, port);
     this._handle.close();
     this._handle = null;
     defaultTriggerAsyncIdScope(this[async_id_symbol],
@@ -1349,12 +1934,12 @@ function emitListeningNT(self) {
 
 
 function listenInCluster(server, address, port, addressType,
-                         backlog, fd, exclusive, flags) {
+                         backlog, fd, exclusive, flags, options) {
   exclusive = !!exclusive;
 
   if (cluster === undefined) cluster = require('cluster');
 
-  if (cluster.isMaster || exclusive) {
+  if (cluster.isPrimary || exclusive) {
     // Will create a new handle
     // _listen2 sets up the listened handle, it is still named like this
     // to avoid breaking code that wraps this method
@@ -1368,20 +1953,29 @@ function listenInCluster(server, address, port, addressType,
     addressType: addressType,
     fd: fd,
     flags,
+    backlog,
+    ...options,
   };
-
-  // Get the master's server handle, and listen on it
-  cluster._getServer(server, serverQuery, listenOnMasterHandle);
-
-  function listenOnMasterHandle(err, handle) {
+  const listeningId = server._listeningId;
+  // Get the primary's server handle, and listen on it
+  cluster._getServer(server, serverQuery, listenOnPrimaryHandle);
+  function listenOnPrimaryHandle(err, handle) {
+    if (listeningId !== server._listeningId) {
+      handle.close();
+      return;
+    }
     err = checkBindError(err, port, handle);
 
     if (err) {
-      const ex = exceptionWithHostPort(err, 'bind', address, port);
+      const ex = new ExceptionWithHostPort(err, 'bind', address, port);
       return server.emit('error', ex);
     }
-
-    // Reuse master's server handle
+    // If there was a handle, just close it to avoid fd leak
+    // but it doesn't look like that's going to happen right now
+    if (server._handle) {
+      server._handle.close();
+    }
+    // Reuse primary's server handle
     server._handle = handle;
     // _listen2 sets up the listened handle, it is still named like this
     // to avoid breaking code that wraps this method
@@ -1409,13 +2003,16 @@ Server.prototype.listen = function(...args) {
 
   options = options._handle || options.handle || options;
   const flags = getFlags(options.ipv6Only);
+  //  Refresh the id to make the previous call invalid
+  this._listeningId++;
   // (handle[, backlog][, cb]) where handle is an object with a handle
   if (options instanceof TCP) {
     this._handle = options;
     this[async_id_symbol] = this._handle.getAsyncId();
-    listenInCluster(this, null, -1, -1, backlogFromArgs);
+    listenInCluster(this, null, -1, -1, backlogFromArgs, undefined, true);
     return this;
   }
+  addServerAbortSignalOption(this, options);
   // (handle[, backlog][, cb]) where handle is an object with a fd
   if (typeof options.fd === 'number' && options.fd >= 0) {
     listenInCluster(this, null, null, null, backlogFromArgs, options.fd);
@@ -1443,7 +2040,7 @@ Server.prototype.listen = function(...args) {
       lookupAndListen(this, options.port | 0, options.host, backlog,
                       options.exclusive, flags);
     } else { // Undefined host, listens on unspecified address
-      // Default addressType 4 will be used to search for master server
+      // Default addressType 4 will be used to search for primary server
       listenInCluster(this, null, options.port | 0, 4,
                       backlog, undefined, options.exclusive);
     }
@@ -1453,10 +2050,26 @@ Server.prototype.listen = function(...args) {
   // (path[, backlog][, cb]) or (options[, cb])
   // where path or options.path is a UNIX domain socket or Windows pipe
   if (options.path && isPipeName(options.path)) {
+    // We can not call fchmod on abstract unix socket
+    if (options.path[0] === '\0' &&
+        (options.readableAll || options.writableAll)) {
+      const msg = 'can not set readableAll or writableAllt to true when path is abstract unix socket';
+      throw new ERR_INVALID_ARG_VALUE('options', options, msg);
+    }
     const pipeName = this._pipeName = options.path;
     backlog = options.backlog || backlogFromArgs;
-    listenInCluster(this, pipeName, -1, -1,
-                    backlog, undefined, options.exclusive);
+    listenInCluster(this,
+                    pipeName,
+                    -1,
+                    -1,
+                    backlog,
+                    undefined,
+                    options.exclusive,
+                    undefined,
+                    {
+                      readableAll: options.readableAll,
+                      writableAll: options.writableAll,
+                    });
 
     if (!this._handle) {
       // Failed and an error shall be emitted in the next tick.
@@ -1474,7 +2087,7 @@ Server.prototype.listen = function(...args) {
       if (err) {
         this._handle.close();
         this._handle = null;
-        throw errnoException(err, 'uv_pipe_chmod');
+        throw new ErrnoException(err, 'uv_pipe_chmod');
       }
     }
     return this;
@@ -1485,12 +2098,17 @@ Server.prototype.listen = function(...args) {
                                     'must have the property "port" or "path"');
   }
 
-  throw new ERR_INVALID_OPT_VALUE('options', inspect(options));
+  throw new ERR_INVALID_ARG_VALUE('options', options);
 };
 
-function lookupAndListen(self, port, address, backlog, exclusive, flags) {
+function lookupAndListen(self, port, address, backlog,
+                         exclusive, flags) {
   if (dns === undefined) dns = require('dns');
+  const listeningId = self._listeningId;
   dns.lookup(address, function doListen(err, ip, addressType) {
+    if (listeningId !== self._listeningId) {
+      return;
+    }
     if (err) {
       self.emit('error', err);
     } else {
@@ -1502,11 +2120,12 @@ function lookupAndListen(self, port, address, backlog, exclusive, flags) {
 }
 
 ObjectDefineProperty(Server.prototype, 'listening', {
+  __proto__: null,
   get: function() {
     return !!this._handle;
   },
   configurable: true,
-  enumerable: true
+  enumerable: true,
 });
 
 Server.prototype.address = function() {
@@ -1514,7 +2133,7 @@ Server.prototype.address = function() {
     const out = {};
     const err = this._handle.getsockname(out);
     if (err) {
-      throw errnoException(err, 'address');
+      throw new ErrnoException(err, 'address');
     }
     return out;
   } else if (this._pipeName) {
@@ -1530,11 +2149,31 @@ function onconnection(err, clientHandle) {
   debug('onconnection');
 
   if (err) {
-    self.emit('error', errnoException(err, 'accept'));
+    self.emit('error', new ErrnoException(err, 'accept'));
     return;
   }
 
   if (self.maxConnections && self._connections >= self.maxConnections) {
+    if (clientHandle.getsockname || clientHandle.getpeername) {
+      const data = { __proto__: null };
+      if (clientHandle.getsockname) {
+        const localInfo = { __proto__: null };
+        clientHandle.getsockname(localInfo);
+        data.localAddress = localInfo.address;
+        data.localPort = localInfo.port;
+        data.localFamily = localInfo.family;
+      }
+      if (clientHandle.getpeername) {
+        const remoteInfo = { __proto__: null };
+        clientHandle.getpeername(remoteInfo);
+        data.remoteAddress = remoteInfo.address;
+        data.remotePort = remoteInfo.port;
+        data.remoteFamily = remoteInfo.family;
+      }
+      self.emit('drop', data);
+    } else {
+      self.emit('drop');
+    }
     clientHandle.close();
     return;
   }
@@ -1544,17 +2183,37 @@ function onconnection(err, clientHandle) {
     allowHalfOpen: self.allowHalfOpen,
     pauseOnCreate: self.pauseOnConnect,
     readable: true,
-    writable: true
+    writable: true,
+    readableHighWaterMark: self.highWaterMark,
+    writableHighWaterMark: self.highWaterMark,
   });
+
+  if (self.noDelay && clientHandle.setNoDelay) {
+    socket[kSetNoDelay] = true;
+    clientHandle.setNoDelay(true);
+  }
+  if (self.keepAlive && clientHandle.setKeepAlive) {
+    socket[kSetKeepAlive] = true;
+    socket[kSetKeepAliveInitialDelay] = self.keepAliveInitialDelay;
+    clientHandle.setKeepAlive(true, self.keepAliveInitialDelay);
+  }
 
   self._connections++;
   socket.server = self;
   socket._server = self;
-
-  DTRACE_NET_SERVER_CONNECTION(socket);
   self.emit('connection', socket);
+  if (netServerSocketChannel.hasSubscribers) {
+    netServerSocketChannel.publish({
+      socket,
+    });
+  }
 }
 
+/**
+ * Gets the number of concurrent connections on the server
+ * @param {Function} cb
+ * @returns {Server}
+ */
 
 Server.prototype.getConnections = function(cb) {
   const self = this;
@@ -1595,6 +2254,7 @@ Server.prototype.getConnections = function(cb) {
 
 
 Server.prototype.close = function(cb) {
+  this._listeningId++;
   if (typeof cb === 'function') {
     if (!this._handle) {
       this.once('close', function close() {
@@ -1631,6 +2291,13 @@ Server.prototype.close = function(cb) {
   }
 
   return this;
+};
+
+Server.prototype[SymbolAsyncDispose] = async function() {
+  if (!this._handle) {
+    return;
+  }
+  return FunctionPrototypeCall(promisify(this.close), this);
 };
 
 Server.prototype._emitCloseIfDrained = function() {
@@ -1671,20 +2338,22 @@ Server.prototype[EventEmitter.captureRejectionSymbol] = function(
 // Legacy alias on the C++ wrapper object. This is not public API, so we may
 // want to runtime-deprecate it at some point. There's no hurry, though.
 ObjectDefineProperty(TCP.prototype, 'owner', {
+  __proto__: null,
   get() { return this[owner_symbol]; },
-  set(v) { return this[owner_symbol] = v; }
+  set(v) { return this[owner_symbol] = v; },
 });
 
 ObjectDefineProperty(Socket.prototype, '_handle', {
+  __proto__: null,
   get() { return this[kHandle]; },
-  set(v) { return this[kHandle] = v; }
+  set(v) { return this[kHandle] = v; },
 });
 
 Server.prototype._setupWorker = function(socketList) {
   this._usingWorkers = true;
   this._workers.push(socketList);
   socketList.once('exit', (socketList) => {
-    const index = this._workers.indexOf(socketList);
+    const index = ArrayPrototypeIndexOf(this._workers, socketList);
     this._workers.splice(index, 1);
   });
 };
@@ -1749,6 +2418,14 @@ module.exports = {
   _createServerHandle: createServerHandle,
   _normalizeArgs: normalizeArgs,
   _setSimultaneousAccepts,
+  get BlockList() {
+    BlockList ??= require('internal/blocklist').BlockList;
+    return BlockList;
+  },
+  get SocketAddress() {
+    SocketAddress ??= require('internal/socketaddress').SocketAddress;
+    return SocketAddress;
+  },
   connect,
   createConnection: connect,
   createServer,
@@ -1758,4 +2435,8 @@ module.exports = {
   Server,
   Socket,
   Stream: Socket, // Legacy naming
+  getDefaultAutoSelectFamily,
+  setDefaultAutoSelectFamily,
+  getDefaultAutoSelectFamilyAttemptTimeout,
+  setDefaultAutoSelectFamilyAttemptTimeout,
 };

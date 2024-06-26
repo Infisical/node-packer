@@ -34,7 +34,7 @@ class Deletable {
 };
 
 std::unique_ptr<v8_inspector::StringBuffer> Utf8ToStringView(
-    const std::string& message);
+    const std::string_view message);
 
 using MessageQueue = std::deque<std::unique_ptr<Request>>;
 
@@ -72,13 +72,13 @@ class MainThreadHandle : public std::enable_shared_from_this<MainThreadHandle> {
 class MainThreadInterface :
     public std::enable_shared_from_this<MainThreadInterface> {
  public:
-  MainThreadInterface(Agent* agent, uv_loop_t*, v8::Isolate* isolate,
-                      v8::Platform* platform);
+  explicit MainThreadInterface(Agent* agent);
   ~MainThreadInterface();
 
   void DispatchMessages();
   void Post(std::unique_ptr<Request> request);
   bool WaitForFrontendEvent();
+  void StopWaitingForFrontendEvent();
   std::shared_ptr<MainThreadHandle> GetHandle();
   Agent* inspector_agent() {
     return agent_;
@@ -95,11 +95,13 @@ class MainThreadInterface :
   // when we reenter the DispatchMessages function.
   MessageQueue dispatching_message_queue_;
   bool dispatching_messages_ = false;
+  // This flag indicates an internal request to exit the loop in
+  // WaitForFrontendEvent(). It's set to true by calling
+  // StopWaitingForFrontendEvent().
+  bool stop_waiting_for_frontend_event_requested_ = false;
   ConditionVariable incoming_message_cond_;
   // Used from any thread
   Agent* const agent_;
-  v8::Isolate* const isolate_;
-  v8::Platform* const platform_;
   std::shared_ptr<MainThreadHandle> handle_;
   std::unordered_map<int, std::unique_ptr<Deletable>> managed_objects_;
 };

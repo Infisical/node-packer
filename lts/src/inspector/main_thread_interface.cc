@@ -1,10 +1,8 @@
 #include "main_thread_interface.h"
 
-#include "node_mutex.h"
+#include "env-inl.h"
+#include "simdutf.h"
 #include "v8-inspector.h"
-#include "util-inl.h"
-
-#include <unicode/unistr.h>
 
 #include <functional>
 #include <memory>
@@ -13,8 +11,8 @@ namespace node {
 namespace inspector {
 namespace {
 
-using v8_inspector::StringView;
 using v8_inspector::StringBuffer;
+using v8_inspector::StringView;
 
 template <typename T>
 class DeletableWrapper : public Deletable {
@@ -83,19 +81,6 @@ class CallRequest : public Request {
  private:
   int id_;
   Fn fn_;
-};
-
-class DispatchMessagesTask : public v8::Task {
- public:
-  explicit DispatchMessagesTask(std::weak_ptr<MainThreadInterface> thread)
-                                : thread_(thread) {}
-
-  void Run() override {
-    if (auto thread = thread_.lock()) thread->DispatchMessages();
-  }
-
- private:
-  std::weak_ptr<MainThreadInterface> thread_;
 };
 
 template <typename T>
@@ -212,12 +197,7 @@ class ThreadSafeDelegate : public InspectorSessionDelegate {
 }  // namespace
 
 
-MainThreadInterface::MainThreadInterface(Agent* agent, uv_loop_t* loop,
-                                         v8::Isolate* isolate,
-                                         v8::Platform* platform)
-                                         : agent_(agent), isolate_(isolate),
-                                           platform_(platform) {
-}
+MainThreadInterface::MainThreadInterface(Agent* agent) : agent_(agent) {}
 
 MainThreadInterface::~MainThreadInterface() {
   if (handle_)
@@ -225,23 +205,15 @@ MainThreadInterface::~MainThreadInterface() {
 }
 
 void MainThreadInterface::Post(std::unique_ptr<Request> request) {
+  CHECK_NOT_NULL(agent_);
   Mutex::ScopedLock scoped_lock(requests_lock_);
   bool needs_notify = requests_.empty();
   requests_.push_back(std::move(request));
   if (needs_notify) {
-    if (isolate_ != nullptr && platform_ != nullptr) {
-      std::shared_ptr<v8::TaskRunner> taskrunner =
-          platform_->GetForegroundTaskRunner(isolate_);
-      std::weak_ptr<MainThreadInterface>* interface_ptr =
-          new std::weak_ptr<MainThreadInterface>(shared_from_this());
-      taskrunner->PostTask(
-          std::make_unique<DispatchMessagesTask>(*interface_ptr));
-      isolate_->RequestInterrupt([](v8::Isolate* isolate, void* opaque) {
-        std::unique_ptr<std::weak_ptr<MainThreadInterface>> interface_ptr {
-          static_cast<std::weak_ptr<MainThreadInterface>*>(opaque) };
-        if (auto iface = interface_ptr->lock()) iface->DispatchMessages();
-      }, static_cast<void*>(interface_ptr));
-    }
+    std::weak_ptr<MainThreadInterface> weak_self {shared_from_this()};
+    agent_->env()->RequestInterrupt([weak_self](Environment*) {
+      if (auto iface = weak_self.lock()) iface->DispatchMessages();
+    });
   }
   incoming_message_cond_.Broadcast(scoped_lock);
 }
@@ -253,9 +225,18 @@ bool MainThreadInterface::WaitForFrontendEvent() {
   dispatching_messages_ = false;
   if (dispatching_message_queue_.empty()) {
     Mutex::ScopedLock scoped_lock(requests_lock_);
-    while (requests_.empty()) incoming_message_cond_.Wait(scoped_lock);
+    while (!stop_waiting_for_frontend_event_requested_ && requests_.empty()) {
+      incoming_message_cond_.Wait(scoped_lock);
+    }
+    stop_waiting_for_frontend_event_requested_ = false;
   }
   return true;
+}
+
+void MainThreadInterface::StopWaitingForFrontendEvent() {
+  Mutex::ScopedLock scoped_lock(requests_lock_);
+  stop_waiting_for_frontend_event_requested_ = true;
+  incoming_message_cond_.Broadcast(scoped_lock);
 }
 
 void MainThreadInterface::DispatchMessages() {
@@ -274,7 +255,7 @@ void MainThreadInterface::DispatchMessages() {
       std::swap(dispatching_message_queue_.front(), task);
       dispatching_message_queue_.pop_front();
 
-      v8::SealHandleScope seal_handle_scope(isolate_);
+      v8::SealHandleScope seal_handle_scope(agent_->env()->isolate());
       task->Call(this);
     }
   } while (had_messages);
@@ -313,11 +294,13 @@ Deletable* MainThreadInterface::GetObjectIfExists(int id) {
   return iterator->second.get();
 }
 
-std::unique_ptr<StringBuffer> Utf8ToStringView(const std::string& message) {
-  icu::UnicodeString utf16 = icu::UnicodeString::fromUTF8(
-      icu::StringPiece(message.data(), message.length()));
-  StringView view(reinterpret_cast<const uint16_t*>(utf16.getBuffer()),
-                  utf16.length());
+std::unique_ptr<StringBuffer> Utf8ToStringView(const std::string_view message) {
+  size_t expected_u16_length =
+      simdutf::utf16_length_from_utf8(message.data(), message.length());
+  MaybeStackBuffer<char16_t> buffer(expected_u16_length);
+  size_t utf16_length = simdutf::convert_utf8_to_utf16(
+      message.data(), message.length(), buffer.out());
+  StringView view(reinterpret_cast<uint16_t*>(buffer.out()), utf16_length);
   return StringBuffer::create(view);
 }
 

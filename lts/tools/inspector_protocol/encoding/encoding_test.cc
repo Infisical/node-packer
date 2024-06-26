@@ -121,6 +121,28 @@ TEST(SpanFromTest, FromConstCharAndLiteral) {
   EXPECT_EQ(3u, SpanFrom("foo").size());
 }
 
+TEST(SpanComparisons, ByteWiseLexicographicalOrder) {
+  // Compare the empty span.
+  EXPECT_FALSE(SpanLessThan(span<uint8_t>(), span<uint8_t>()));
+  EXPECT_TRUE(SpanEquals(span<uint8_t>(), span<uint8_t>()));
+
+  // Compare message with itself.
+  std::string msg = "Hello, world";
+  EXPECT_FALSE(SpanLessThan(SpanFrom(msg), SpanFrom(msg)));
+  EXPECT_TRUE(SpanEquals(SpanFrom(msg), SpanFrom(msg)));
+
+  // Compare message and copy.
+  EXPECT_FALSE(SpanLessThan(SpanFrom(msg), SpanFrom(std::string(msg))));
+  EXPECT_TRUE(SpanEquals(SpanFrom(msg), SpanFrom(std::string(msg))));
+
+  // Compare two messages. |lesser_msg| < |msg| because of the first
+  // byte ('A' < 'H').
+  std::string lesser_msg = "A lesser message.";
+  EXPECT_TRUE(SpanLessThan(SpanFrom(lesser_msg), SpanFrom(msg)));
+  EXPECT_FALSE(SpanLessThan(SpanFrom(msg), SpanFrom(lesser_msg)));
+  EXPECT_FALSE(SpanEquals(SpanFrom(msg), SpanFrom(lesser_msg)));
+}
+
 // =============================================================================
 // Status and Error codes
 // =============================================================================
@@ -234,6 +256,30 @@ TEST(EncodeDecodeInt32Test, RoundtripsInt32Max) {
   EXPECT_EQ(CBORTokenTag::DONE, tokenizer.TokenTag());
 }
 
+TEST(EncodeDecodeInt32Test, RoundtripsInt32Min) {
+  // std::numeric_limits<int32_t> is encoded as a uint32 (4 unsigned bytes)
+  // after the initial byte, which effectively carries the sign by
+  // designating the token as NEGATIVE.
+  std::vector<uint8_t> encoded;
+  EncodeInt32(std::numeric_limits<int32_t>::min(), &encoded);
+  // 1 for initial byte, 4 for the uint32.
+  // first three bits: major type = 1;
+  // remaining five bits: additional info = 26, indicating payload is uint32.
+  EXPECT_THAT(encoded, ElementsAreArray(std::array<uint8_t, 5>{
+                           {1 << 5 | 26, 0x7f, 0xff, 0xff, 0xff}}));
+
+  // Reverse direction: decode with CBORTokenizer.
+  CBORTokenizer tokenizer(SpanFrom(encoded));
+  EXPECT_EQ(CBORTokenTag::INT32, tokenizer.TokenTag());
+  EXPECT_EQ(std::numeric_limits<int32_t>::min(), tokenizer.GetInt32());
+  // It's nice to see how the min int32 value reads in hex:
+  // That is, -1 minus the unsigned payload (0x7fffffff, see above).
+  int32_t expected = -1 - 0x7fffffff;
+  EXPECT_EQ(expected, tokenizer.GetInt32());
+  tokenizer.Next();
+  EXPECT_EQ(CBORTokenTag::DONE, tokenizer.TokenTag());
+}
+
 TEST(EncodeDecodeInt32Test, CantRoundtripUint32) {
   // 0xdeadbeef is a value which does not fit below
   // std::numerical_limits<int32_t>::max(), so we can't encode
@@ -261,15 +307,21 @@ TEST(EncodeDecodeInt32Test, DecodeErrorCases) {
     std::vector<uint8_t> data;
     std::string msg;
   };
-  std::vector<TestCase> tests{
-      {TestCase{
-           {24},
-           "additional info = 24 would require 1 byte of payload (but it's 0)"},
-       TestCase{{27, 0xaa, 0xbb, 0xcc},
-                "additional info = 27 would require 8 bytes of payload (but "
-                "it's 3)"},
-       TestCase{{29}, "additional info = 29 isn't recognized"}}};
-
+  std::vector<TestCase> tests{{
+      TestCase{
+          {24},
+          "additional info = 24 would require 1 byte of payload (but it's 0)"},
+      TestCase{{27, 0xaa, 0xbb, 0xcc},
+               "additional info = 27 would require 8 bytes of payload (but "
+               "it's 3)"},
+      TestCase{{29}, "additional info = 29 isn't recognized"},
+      TestCase{{1 << 5 | 27, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff},
+               "Max UINT64 payload is outside the allowed range"},
+      TestCase{{1 << 5 | 26, 0xff, 0xff, 0xff, 0xff},
+               "Max UINT32 payload is outside the allowed range"},
+      TestCase{{1 << 5 | 26, 0x80, 0x00, 0x00, 0x00},
+               "UINT32 payload w/ high bit set is outside the allowed range"},
+  }};
   for (const TestCase& test : tests) {
     SCOPED_TRACE(test.msg);
     CBORTokenizer tokenizer(SpanFrom(test.data));
@@ -1295,6 +1347,25 @@ void WriteUTF8AsUTF16(StreamingParserHandler* writer, const std::string& utf8) {
   writer->HandleString16(SpanFrom(UTF8ToUTF16(SpanFrom(utf8))));
 }
 
+TEST(JsonEncoder, OverlongEncodings) {
+  std::string out;
+  Status status;
+  std::unique_ptr<StreamingParserHandler> writer =
+      NewJSONEncoder(&GetTestPlatform(), &out, &status);
+
+  // We encode 0x7f, which is the DEL ascii character, as a 4 byte UTF8
+  // sequence. This is called an overlong encoding, because only 1 byte
+  // is needed to represent 0x7f as UTF8.
+  std::vector<uint8_t> chars = {
+      0xf0,  // Starts 4 byte utf8 sequence
+      0x80,  // continuation byte
+      0x81,  // continuation byte w/ payload bit 7 set to 1.
+      0xbf,  // continuation byte w/ payload bits 0-6 set to 11111.
+  };
+  writer->HandleString8(SpanFrom(chars));
+  EXPECT_EQ("\"\"", out);  // Empty string means that 0x7f was rejected (good).
+}
+
 TEST(JsonStdStringWriterTest, HelloWorld) {
   std::string out;
   Status status;
@@ -1515,6 +1586,29 @@ TEST_F(JsonParserTest, SimpleDictionary) {
       "int: 42\n"
       "map end\n",
       log_.str());
+}
+
+TEST_F(JsonParserTest, UsAsciiDelCornerCase) {
+  // DEL (0x7f) is a 7 bit US-ASCII character, and while it is a control
+  // character according to Unicode, it's not considered a control
+  // character in https://tools.ietf.org/html/rfc7159#section-7, so
+  // it can be placed directly into the JSON string, without JSON escaping.
+  std::string json = "{\"foo\": \"a\x7f\"}";
+  ParseJSON(GetTestPlatform(), SpanFrom(json), &log_);
+  EXPECT_TRUE(log_.status().ok());
+  EXPECT_EQ(
+      "map begin\n"
+      "string16: foo\n"
+      "string16: a\x7f\n"
+      "map end\n",
+      log_.str());
+
+  // We've seen an implementation of UTF16ToUTF8 which would replace the DEL
+  // character with ' ', so this simple roundtrip tests the routines in
+  // encoding_test_helper.h, to make test failures of the above easier to
+  // diagnose.
+  std::vector<uint16_t> utf16 = UTF8ToUTF16(SpanFrom(json));
+  EXPECT_EQ(json, UTF16ToUTF8(SpanFrom(utf16)));
 }
 
 TEST_F(JsonParserTest, Whitespace) {

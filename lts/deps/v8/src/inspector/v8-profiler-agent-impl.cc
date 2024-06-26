@@ -6,7 +6,9 @@
 
 #include <vector>
 
+#include "include/v8-profiler.h"
 #include "src/base/atomicops.h"
+#include "src/base/platform/time.h"
 #include "src/debug/debug-interface.h"
 #include "src/inspector/protocol/Protocol.h"
 #include "src/inspector/string-util.h"
@@ -14,8 +16,6 @@
 #include "src/inspector/v8-inspector-impl.h"
 #include "src/inspector/v8-inspector-session-impl.h"
 #include "src/inspector/v8-stack-trace-impl.h"
-
-#include "include/v8-profiler.h"
 
 namespace v8_inspector {
 
@@ -26,8 +26,9 @@ static const char profilerEnabled[] = "profilerEnabled";
 static const char preciseCoverageStarted[] = "preciseCoverageStarted";
 static const char preciseCoverageCallCount[] = "preciseCoverageCallCount";
 static const char preciseCoverageDetailed[] = "preciseCoverageDetailed";
-static const char typeProfileStarted[] = "typeProfileStarted";
-}
+static const char preciseCoverageAllowTriggeredUpdates[] =
+    "preciseCoverageAllowTriggeredUpdates";
+}  // namespace ProfilerAgentState
 
 namespace {
 
@@ -44,8 +45,8 @@ std::unique_ptr<protocol::Array<protocol::Profiler::PositionTickInfo>>
 buildInspectorObjectForPositionTicks(const v8::CpuProfileNode* node) {
   unsigned lineCount = node->GetHitLineCount();
   if (!lineCount) return nullptr;
-  auto array = v8::base::make_unique<
-      protocol::Array<protocol::Profiler::PositionTickInfo>>();
+  auto array =
+      std::make_unique<protocol::Array<protocol::Profiler::PositionTickInfo>>();
   std::vector<v8::CpuProfileNode::LineTick> entries(lineCount);
   if (node->GetLineTicks(&entries[0], lineCount)) {
     for (unsigned i = 0; i < lineCount; i++) {
@@ -80,7 +81,7 @@ std::unique_ptr<protocol::Profiler::ProfileNode> buildInspectorObjectFor(
 
   const int childrenCount = node->GetChildrenCount();
   if (childrenCount) {
-    auto children = v8::base::make_unique<protocol::Array<int>>();
+    auto children = std::make_unique<protocol::Array<int>>();
     for (int i = 0; i < childrenCount; i++)
       children->emplace_back(node->GetChild(i)->GetNodeId());
     result->setChildren(std::move(children));
@@ -98,7 +99,7 @@ std::unique_ptr<protocol::Profiler::ProfileNode> buildInspectorObjectFor(
 
 std::unique_ptr<protocol::Array<int>> buildInspectorObjectForSamples(
     v8::CpuProfile* v8profile) {
-  auto array = v8::base::make_unique<protocol::Array<int>>();
+  auto array = std::make_unique<protocol::Array<int>>();
   int count = v8profile->GetSamplesCount();
   for (int i = 0; i < count; i++)
     array->emplace_back(v8profile->GetSample(i)->GetNodeId());
@@ -107,7 +108,7 @@ std::unique_ptr<protocol::Array<int>> buildInspectorObjectForSamples(
 
 std::unique_ptr<protocol::Array<int>> buildInspectorObjectForTimestamps(
     v8::CpuProfile* v8profile) {
-  auto array = v8::base::make_unique<protocol::Array<int>>();
+  auto array = std::make_unique<protocol::Array<int>>();
   int count = v8profile->GetSamplesCount();
   uint64_t lastTime = v8profile->GetStartTime();
   for (int i = 0; i < count; i++) {
@@ -130,7 +131,7 @@ void flattenNodesTree(V8InspectorImpl* inspector,
 std::unique_ptr<protocol::Profiler::Profile> createCPUProfile(
     V8InspectorImpl* inspector, v8::CpuProfile* v8profile) {
   auto nodes =
-      v8::base::make_unique<protocol::Array<protocol::Profiler::ProfileNode>>();
+      std::make_unique<protocol::Array<protocol::Profiler::ProfileNode>>();
   flattenNodesTree(inspector, v8profile->GetTopDownRoot(), nodes.get());
   return protocol::Profiler::Profile::create()
       .setNodes(std::move(nodes))
@@ -143,14 +144,14 @@ std::unique_ptr<protocol::Profiler::Profile> createCPUProfile(
 
 std::unique_ptr<protocol::Debugger::Location> currentDebugLocation(
     V8InspectorImpl* inspector) {
-  std::unique_ptr<V8StackTraceImpl> callStack =
-      inspector->debugger()->captureStackTrace(false /* fullStack */);
-  auto location = protocol::Debugger::Location::create()
-                      .setScriptId(toString16(callStack->topScriptId()))
-                      .setLineNumber(callStack->topLineNumber())
-                      .build();
-  location->setColumnNumber(callStack->topColumnNumber());
-  return location;
+  auto stackTrace = V8StackTraceImpl::capture(inspector->debugger(), 1);
+  CHECK(stackTrace);
+  CHECK(!stackTrace->isEmpty());
+  return protocol::Debugger::Location::create()
+      .setScriptId(String16::fromInteger(stackTrace->topScriptId()))
+      .setLineNumber(stackTrace->topLineNumber())
+      .setColumnNumber(stackTrace->topColumnNumber())
+      .build();
 }
 
 volatile int s_lastProfileId = 0;
@@ -210,97 +211,110 @@ void V8ProfilerAgentImpl::consoleProfileEnd(const String16& title) {
   std::unique_ptr<protocol::Profiler::Profile> profile =
       stopProfiling(id, true);
   if (!profile) return;
-  std::unique_ptr<protocol::Debugger::Location> location =
-      currentDebugLocation(m_session->inspector());
-  m_frontend.consoleProfileFinished(id, std::move(location), std::move(profile),
-                                    resolvedTitle);
+  m_frontend.consoleProfileFinished(
+      id, currentDebugLocation(m_session->inspector()), std::move(profile),
+      resolvedTitle);
 }
 
 Response V8ProfilerAgentImpl::enable() {
-  if (m_enabled) return Response::OK();
-  m_enabled = true;
-  m_state->setBoolean(ProfilerAgentState::profilerEnabled, true);
-  return Response::OK();
+  if (!m_enabled) {
+    m_enabled = true;
+    m_state->setBoolean(ProfilerAgentState::profilerEnabled, true);
+  }
+
+  return Response::Success();
 }
 
 Response V8ProfilerAgentImpl::disable() {
-  if (!m_enabled) return Response::OK();
-  for (size_t i = m_startedProfiles.size(); i > 0; --i)
-    stopProfiling(m_startedProfiles[i - 1].m_id, false);
-  m_startedProfiles.clear();
-  stop(nullptr);
-  stopPreciseCoverage();
-  DCHECK(!m_profiler);
-  m_enabled = false;
-  m_state->setBoolean(ProfilerAgentState::profilerEnabled, false);
-  return Response::OK();
+  if (m_enabled) {
+    for (size_t i = m_startedProfiles.size(); i > 0; --i)
+      stopProfiling(m_startedProfiles[i - 1].m_id, false);
+    m_startedProfiles.clear();
+    stop(nullptr);
+    stopPreciseCoverage();
+    DCHECK(!m_profiler);
+    m_enabled = false;
+    m_state->setBoolean(ProfilerAgentState::profilerEnabled, false);
+  }
+
+  return Response::Success();
 }
 
 Response V8ProfilerAgentImpl::setSamplingInterval(int interval) {
   if (m_profiler) {
-    return Response::Error("Cannot change sampling interval when profiling.");
+    return Response::ServerError(
+        "Cannot change sampling interval when profiling.");
   }
   m_state->setInteger(ProfilerAgentState::samplingInterval, interval);
-  return Response::OK();
+  return Response::Success();
 }
 
 void V8ProfilerAgentImpl::restore() {
   DCHECK(!m_enabled);
-  if (!m_state->booleanProperty(ProfilerAgentState::profilerEnabled, false))
-    return;
-  m_enabled = true;
-  DCHECK(!m_profiler);
-  if (m_state->booleanProperty(ProfilerAgentState::userInitiatedProfiling,
-                               false)) {
-    start();
-  }
-  if (m_state->booleanProperty(ProfilerAgentState::preciseCoverageStarted,
-                               false)) {
-    bool callCount = m_state->booleanProperty(
-        ProfilerAgentState::preciseCoverageCallCount, false);
-    bool detailed = m_state->booleanProperty(
-        ProfilerAgentState::preciseCoverageDetailed, false);
-    startPreciseCoverage(Maybe<bool>(callCount), Maybe<bool>(detailed));
+  if (m_state->booleanProperty(ProfilerAgentState::profilerEnabled, false)) {
+    m_enabled = true;
+    DCHECK(!m_profiler);
+    if (m_state->booleanProperty(ProfilerAgentState::userInitiatedProfiling,
+                                 false)) {
+      start();
+    }
+    if (m_state->booleanProperty(ProfilerAgentState::preciseCoverageStarted,
+                                 false)) {
+      bool callCount = m_state->booleanProperty(
+          ProfilerAgentState::preciseCoverageCallCount, false);
+      bool detailed = m_state->booleanProperty(
+          ProfilerAgentState::preciseCoverageDetailed, false);
+      bool updatesAllowed = m_state->booleanProperty(
+          ProfilerAgentState::preciseCoverageAllowTriggeredUpdates, false);
+      double timestamp;
+      startPreciseCoverage(Maybe<bool>(callCount), Maybe<bool>(detailed),
+                           Maybe<bool>(updatesAllowed), &timestamp);
+    }
   }
 }
 
 Response V8ProfilerAgentImpl::start() {
-  if (m_recordingCPUProfile) return Response::OK();
-  if (!m_enabled) return Response::Error("Profiler is not enabled");
+  if (m_recordingCPUProfile) return Response::Success();
+  if (!m_enabled) return Response::ServerError("Profiler is not enabled");
   m_recordingCPUProfile = true;
   m_frontendInitiatedProfileId = nextProfileId();
   startProfiling(m_frontendInitiatedProfileId);
   m_state->setBoolean(ProfilerAgentState::userInitiatedProfiling, true);
-  return Response::OK();
+  return Response::Success();
 }
 
 Response V8ProfilerAgentImpl::stop(
     std::unique_ptr<protocol::Profiler::Profile>* profile) {
   if (!m_recordingCPUProfile) {
-    return Response::Error("No recording profiles found");
+    return Response::ServerError("No recording profiles found");
   }
   m_recordingCPUProfile = false;
   std::unique_ptr<protocol::Profiler::Profile> cpuProfile =
       stopProfiling(m_frontendInitiatedProfileId, !!profile);
   if (profile) {
     *profile = std::move(cpuProfile);
-    if (!profile->get()) return Response::Error("Profile is not found");
+    if (!profile->get()) return Response::ServerError("Profile is not found");
   }
   m_frontendInitiatedProfileId = String16();
   m_state->setBoolean(ProfilerAgentState::userInitiatedProfiling, false);
-  return Response::OK();
+  return Response::Success();
 }
 
-Response V8ProfilerAgentImpl::startPreciseCoverage(Maybe<bool> callCount,
-                                                   Maybe<bool> detailed) {
-  if (!m_enabled) return Response::Error("Profiler is not enabled");
+Response V8ProfilerAgentImpl::startPreciseCoverage(
+    Maybe<bool> callCount, Maybe<bool> detailed,
+    Maybe<bool> allowTriggeredUpdates, double* out_timestamp) {
+  if (!m_enabled) return Response::ServerError("Profiler is not enabled");
+  *out_timestamp = v8::base::TimeTicks::Now().since_origin().InSecondsF();
   bool callCountValue = callCount.fromMaybe(false);
   bool detailedValue = detailed.fromMaybe(false);
+  bool allowTriggeredUpdatesValue = allowTriggeredUpdates.fromMaybe(false);
   m_state->setBoolean(ProfilerAgentState::preciseCoverageStarted, true);
   m_state->setBoolean(ProfilerAgentState::preciseCoverageCallCount,
                       callCountValue);
   m_state->setBoolean(ProfilerAgentState::preciseCoverageDetailed,
                       detailedValue);
+  m_state->setBoolean(ProfilerAgentState::preciseCoverageAllowTriggeredUpdates,
+                      allowTriggeredUpdatesValue);
   // BlockCount is a superset of PreciseCount. It includes block-granularity
   // coverage data if it exists (at the time of writing, that's the case for
   // each function recompiled after the BlockCount mode has been set); and
@@ -311,17 +325,17 @@ Response V8ProfilerAgentImpl::startPreciseCoverage(Maybe<bool> callCount,
                   ? (detailedValue ? Mode::kBlockCount : Mode::kPreciseCount)
                   : (detailedValue ? Mode::kBlockBinary : Mode::kPreciseBinary);
   C::SelectMode(m_isolate, mode);
-  return Response::OK();
+  return Response::Success();
 }
 
 Response V8ProfilerAgentImpl::stopPreciseCoverage() {
-  if (!m_enabled) return Response::Error("Profiler is not enabled");
+  if (!m_enabled) return Response::ServerError("Profiler is not enabled");
   m_state->setBoolean(ProfilerAgentState::preciseCoverageStarted, false);
   m_state->setBoolean(ProfilerAgentState::preciseCoverageCallCount, false);
   m_state->setBoolean(ProfilerAgentState::preciseCoverageDetailed, false);
   v8::debug::Coverage::SelectMode(m_isolate,
                                   v8::debug::CoverageMode::kBestEffort);
-  return Response::OK();
+  return Response::Success();
 }
 
 namespace {
@@ -338,18 +352,18 @@ Response coverageToProtocol(
     V8InspectorImpl* inspector, const v8::debug::Coverage& coverage,
     std::unique_ptr<protocol::Array<protocol::Profiler::ScriptCoverage>>*
         out_result) {
-  auto result = v8::base::make_unique<
-      protocol::Array<protocol::Profiler::ScriptCoverage>>();
+  auto result =
+      std::make_unique<protocol::Array<protocol::Profiler::ScriptCoverage>>();
   v8::Isolate* isolate = inspector->isolate();
   for (size_t i = 0; i < coverage.ScriptCount(); i++) {
     v8::debug::Coverage::ScriptData script_data = coverage.GetScriptData(i);
     v8::Local<v8::debug::Script> script = script_data.GetScript();
-    auto functions = v8::base::make_unique<
+    auto functions = std::make_unique<
         protocol::Array<protocol::Profiler::FunctionCoverage>>();
     for (size_t j = 0; j < script_data.FunctionCount(); j++) {
       v8::debug::Coverage::FunctionData function_data =
           script_data.GetFunctionData(j);
-      auto ranges = v8::base::make_unique<
+      auto ranges = std::make_unique<
           protocol::Array<protocol::Profiler::CoverageRange>>();
 
       // Add function range.
@@ -389,20 +403,41 @@ Response coverageToProtocol(
                              .build());
   }
   *out_result = std::move(result);
-  return Response::OK();
+  return Response::Success();
 }
 }  // anonymous namespace
 
 Response V8ProfilerAgentImpl::takePreciseCoverage(
     std::unique_ptr<protocol::Array<protocol::Profiler::ScriptCoverage>>*
-        out_result) {
+        out_result,
+    double* out_timestamp) {
   if (!m_state->booleanProperty(ProfilerAgentState::preciseCoverageStarted,
                                 false)) {
-    return Response::Error("Precise coverage has not been started.");
+    return Response::ServerError("Precise coverage has not been started.");
   }
   v8::HandleScope handle_scope(m_isolate);
   v8::debug::Coverage coverage = v8::debug::Coverage::CollectPrecise(m_isolate);
+  *out_timestamp = v8::base::TimeTicks::Now().since_origin().InSecondsF();
   return coverageToProtocol(m_session->inspector(), coverage, out_result);
+}
+
+void V8ProfilerAgentImpl::triggerPreciseCoverageDeltaUpdate(
+    const String16& occasion) {
+  if (!m_state->booleanProperty(ProfilerAgentState::preciseCoverageStarted,
+                                false)) {
+    return;
+  }
+  if (!m_state->booleanProperty(
+          ProfilerAgentState::preciseCoverageAllowTriggeredUpdates, false)) {
+    return;
+  }
+  v8::HandleScope handle_scope(m_isolate);
+  v8::debug::Coverage coverage = v8::debug::Coverage::CollectPrecise(m_isolate);
+  std::unique_ptr<protocol::Array<protocol::Profiler::ScriptCoverage>>
+      out_result;
+  coverageToProtocol(m_session->inspector(), coverage, &out_result);
+  double now = v8::base::TimeTicks::Now().since_origin().InSecondsF();
+  m_frontend.preciseCoverageDeltaUpdate(now, occasion, std::move(out_result));
 }
 
 Response V8ProfilerAgentImpl::getBestEffortCoverage(
@@ -412,80 +447,6 @@ Response V8ProfilerAgentImpl::getBestEffortCoverage(
   v8::debug::Coverage coverage =
       v8::debug::Coverage::CollectBestEffort(m_isolate);
   return coverageToProtocol(m_session->inspector(), coverage, out_result);
-}
-
-namespace {
-std::unique_ptr<protocol::Array<protocol::Profiler::ScriptTypeProfile>>
-typeProfileToProtocol(V8InspectorImpl* inspector,
-                      const v8::debug::TypeProfile& type_profile) {
-  auto result = v8::base::make_unique<
-      protocol::Array<protocol::Profiler::ScriptTypeProfile>>();
-  v8::Isolate* isolate = inspector->isolate();
-  for (size_t i = 0; i < type_profile.ScriptCount(); i++) {
-    v8::debug::TypeProfile::ScriptData script_data =
-        type_profile.GetScriptData(i);
-    v8::Local<v8::debug::Script> script = script_data.GetScript();
-    auto entries = v8::base::make_unique<
-        protocol::Array<protocol::Profiler::TypeProfileEntry>>();
-
-    for (const auto& entry : script_data.Entries()) {
-      auto types = v8::base::make_unique<
-          protocol::Array<protocol::Profiler::TypeObject>>();
-      for (const auto& type : entry.Types()) {
-        types->emplace_back(
-            protocol::Profiler::TypeObject::create()
-                .setName(toProtocolString(
-                    isolate, type.FromMaybe(v8::Local<v8::String>())))
-                .build());
-      }
-      entries->emplace_back(protocol::Profiler::TypeProfileEntry::create()
-                                .setOffset(entry.SourcePosition())
-                                .setTypes(std::move(types))
-                                .build());
-    }
-    String16 url;
-    v8::Local<v8::String> name;
-    if (script->SourceURL().ToLocal(&name) && name->Length()) {
-      url = toProtocolString(isolate, name);
-    } else if (script->Name().ToLocal(&name) && name->Length()) {
-      url = resourceNameToUrl(inspector, name);
-    }
-    result->emplace_back(protocol::Profiler::ScriptTypeProfile::create()
-                             .setScriptId(String16::fromInteger(script->Id()))
-                             .setUrl(url)
-                             .setEntries(std::move(entries))
-                             .build());
-  }
-  return result;
-}
-}  // anonymous namespace
-
-Response V8ProfilerAgentImpl::startTypeProfile() {
-  m_state->setBoolean(ProfilerAgentState::typeProfileStarted, true);
-  v8::debug::TypeProfile::SelectMode(m_isolate,
-                                     v8::debug::TypeProfileMode::kCollect);
-  return Response::OK();
-}
-
-Response V8ProfilerAgentImpl::stopTypeProfile() {
-  m_state->setBoolean(ProfilerAgentState::typeProfileStarted, false);
-  v8::debug::TypeProfile::SelectMode(m_isolate,
-                                     v8::debug::TypeProfileMode::kNone);
-  return Response::OK();
-}
-
-Response V8ProfilerAgentImpl::takeTypeProfile(
-    std::unique_ptr<protocol::Array<protocol::Profiler::ScriptTypeProfile>>*
-        out_result) {
-  if (!m_state->booleanProperty(ProfilerAgentState::typeProfileStarted,
-                                false)) {
-    return Response::Error("Type profile has not been started.");
-  }
-  v8::HandleScope handle_scope(m_isolate);
-  v8::debug::TypeProfile type_profile =
-      v8::debug::TypeProfile::Collect(m_isolate);
-  *out_result = typeProfileToProtocol(m_session->inspector(), type_profile);
-  return Response::OK();
 }
 
 String16 V8ProfilerAgentImpl::nextProfileId() {

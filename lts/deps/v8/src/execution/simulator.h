@@ -18,14 +18,16 @@
 #include "src/execution/arm64/simulator-arm64.h"
 #elif V8_TARGET_ARCH_ARM
 #include "src/execution/arm/simulator-arm.h"
-#elif V8_TARGET_ARCH_PPC
+#elif V8_TARGET_ARCH_PPC || V8_TARGET_ARCH_PPC64
 #include "src/execution/ppc/simulator-ppc.h"
-#elif V8_TARGET_ARCH_MIPS
-#include "src/execution/mips/simulator-mips.h"
 #elif V8_TARGET_ARCH_MIPS64
 #include "src/execution/mips64/simulator-mips64.h"
+#elif V8_TARGET_ARCH_LOONG64
+#include "src/execution/loong64/simulator-loong64.h"
 #elif V8_TARGET_ARCH_S390
 #include "src/execution/s390/simulator-s390.h"
+#elif V8_TARGET_ARCH_RISCV32 || V8_TARGET_ARCH_RISCV64
+#include "src/execution/riscv/simulator-riscv.h"
 #else
 #error Unsupported target architecture.
 #endif
@@ -108,13 +110,23 @@ class GeneratedCode {
     return GeneratedCode(isolate, reinterpret_cast<Signature*>(buffer));
   }
 
-  static GeneratedCode FromCode(Code code) {
-    return FromAddress(code.GetIsolate(), code.entry());
+  static GeneratedCode FromCode(Isolate* isolate, Code code) {
+    return FromAddress(isolate, code.InstructionStart());
   }
 
 #ifdef USE_SIMULATOR
   // Defined in simulator-base.h.
   Return Call(Args... args) {
+// Starboard is a platform abstraction interface that also include Windows
+// platforms like UWP.
+#if defined(V8_TARGET_OS_WIN) && !defined(V8_OS_WIN) && \
+    !defined(V8_OS_STARBOARD) && !defined(V8_TARGET_ARCH_ARM)
+    FATAL(
+        "Generated code execution not possible during cross-compilation."
+        "Also, generic C function calls are not implemented on 32-bit arm "
+        "yet.");
+#endif  // defined(V8_TARGET_OS_WIN) && !defined(V8_OS_WIN) &&
+        // !defined(V8_OS_STARBOARD) && !defined(V8_TARGET_ARCH_ARM)
     return Simulator::current(isolate_)->template Call<Return>(
         reinterpret_cast<Address>(fn_ptr_), args...);
   }
@@ -122,7 +134,13 @@ class GeneratedCode {
 
   DISABLE_CFI_ICALL Return Call(Args... args) {
     // When running without a simulator we call the entry directly.
-#if V8_OS_AIX
+// Starboard is a platform abstraction interface that also include Windows
+// platforms like UWP.
+#if defined(V8_TARGET_OS_WIN) && !defined(V8_OS_WIN) && \
+    !defined(V8_OS_STARBOARD)
+    FATAL("Generated code execution not possible during cross-compilation.");
+#endif  // defined(V8_TARGET_OS_WIN) && !defined(V8_OS_WIN)
+#if ABI_USES_FUNCTION_DESCRIPTORS
     // AIX ABI requires function descriptors (FD).  Artificially create a pseudo
     // FD to ensure correct dispatch to generated code.  The 'volatile'
     // declaration is required to avoid the compiler from not observing the
@@ -134,7 +152,7 @@ class GeneratedCode {
     return fn(args...);
 #else
     return fn_ptr_(args...);
-#endif  // V8_OS_AIX
+#endif  // ABI_USES_FUNCTION_DESCRIPTORS
   }
 #endif  // USE_SIMULATOR
 

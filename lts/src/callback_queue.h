@@ -4,8 +4,16 @@
 #if defined(NODE_WANT_INTERNALS) && NODE_WANT_INTERNALS
 
 #include <atomic>
+#include <memory>
 
 namespace node {
+
+namespace CallbackFlags {
+enum Flags {
+  kUnrefed = 0,
+  kRefed = 1,
+};
+}
 
 // A queue of C++ functions that take Args... as arguments and return R
 // (this is similar to the signature of std::function).
@@ -18,25 +26,26 @@ class CallbackQueue {
  public:
   class Callback {
    public:
-    explicit inline Callback(bool refed);
+    explicit inline Callback(CallbackFlags::Flags flags);
 
     virtual ~Callback() = default;
     virtual R Call(Args... args) = 0;
 
-    inline bool is_refed() const;
+    inline CallbackFlags::Flags flags() const;
 
    private:
     inline std::unique_ptr<Callback> get_next();
     inline void set_next(std::unique_ptr<Callback> next);
 
-    bool refed_;
+    CallbackFlags::Flags flags_;
     std::unique_ptr<Callback> next_;
 
     friend class CallbackQueue;
   };
 
   template <typename Fn>
-  inline std::unique_ptr<Callback> CreateCallback(Fn&& fn, bool refed);
+  inline std::unique_ptr<Callback> CreateCallback(
+      Fn&& fn, CallbackFlags::Flags);
 
   inline std::unique_ptr<Callback> Shift();
   inline void Push(std::unique_ptr<Callback> cb);
@@ -51,7 +60,7 @@ class CallbackQueue {
   template <typename Fn>
   class CallbackImpl final : public Callback {
    public:
-    CallbackImpl(Fn&& callback, bool refed);
+    CallbackImpl(Fn&& callback, CallbackFlags::Flags flags);
     R Call(Args... args) override;
 
    private:

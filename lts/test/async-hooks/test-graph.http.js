@@ -12,6 +12,7 @@ const hooks = initHooks();
 hooks.enable();
 
 const server = http.createServer(common.mustCall((req, res) => {
+  res.writeHead(200, { 'Connection': 'close' });
   res.end();
   server.close(common.mustCall());
 }));
@@ -19,7 +20,7 @@ server.listen(0, common.mustCall(() => {
   http.get({
     host: '::1',
     family: 6,
-    port: server.address().port
+    port: server.address().port,
   }, common.mustCall());
 }));
 
@@ -39,15 +40,14 @@ process.on('exit', () => {
         id: 'httpclientrequest:1',
         triggerAsyncId: 'tcpserver:1' },
       { type: 'TCPWRAP', id: 'tcp:2', triggerAsyncId: 'tcpserver:1' },
-      { type: 'Timeout', id: 'timeout:1', triggerAsyncId: 'tcp:2' },
       { type: 'HTTPINCOMINGMESSAGE',
         id: 'httpincomingmessage:1',
         triggerAsyncId: 'tcp:2' },
       { type: 'Timeout',
-        id: 'timeout:2',
-        triggerAsyncId: 'tcp:2' },
+        id: 'timeout:1',
+        triggerAsyncId: null },
       { type: 'SHUTDOWNWRAP',
         id: 'shutdown:1',
-        triggerAsyncId: 'tcp:2' } ]
+        triggerAsyncId: 'tcp:2' } ],
   );
 });

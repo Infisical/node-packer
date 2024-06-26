@@ -3,8 +3,13 @@
 .type	__x86_DES_encrypt,@function
 .align	4
 __x86_DES_encrypt:
+	%ifdef __CET__
+
+.byte	243,15,30,251
+	%endif
+
 	pushl	%ecx
-	# Round 0
+	# Round 0 
 	movl	(%ecx),%eax
 	xorl	%ebx,%ebx
 	movl	4(%ecx),%edx
@@ -33,7 +38,7 @@ __x86_DES_encrypt:
 	movl	(%esp),%ecx
 	xorl	0x400(%ebp,%eax,1),%edi
 	xorl	0x500(%ebp,%edx,1),%edi
-	# Round 1
+	# Round 1 
 	movl	8(%ecx),%eax
 	xorl	%ebx,%ebx
 	movl	12(%ecx),%edx
@@ -62,7 +67,7 @@ __x86_DES_encrypt:
 	movl	(%esp),%ecx
 	xorl	0x400(%ebp,%eax,1),%esi
 	xorl	0x500(%ebp,%edx,1),%esi
-	# Round 2
+	# Round 2 
 	movl	16(%ecx),%eax
 	xorl	%ebx,%ebx
 	movl	20(%ecx),%edx
@@ -91,7 +96,7 @@ __x86_DES_encrypt:
 	movl	(%esp),%ecx
 	xorl	0x400(%ebp,%eax,1),%edi
 	xorl	0x500(%ebp,%edx,1),%edi
-	# Round 3
+	# Round 3 
 	movl	24(%ecx),%eax
 	xorl	%ebx,%ebx
 	movl	28(%ecx),%edx
@@ -120,7 +125,7 @@ __x86_DES_encrypt:
 	movl	(%esp),%ecx
 	xorl	0x400(%ebp,%eax,1),%esi
 	xorl	0x500(%ebp,%edx,1),%esi
-	# Round 4
+	# Round 4 
 	movl	32(%ecx),%eax
 	xorl	%ebx,%ebx
 	movl	36(%ecx),%edx
@@ -149,7 +154,7 @@ __x86_DES_encrypt:
 	movl	(%esp),%ecx
 	xorl	0x400(%ebp,%eax,1),%edi
 	xorl	0x500(%ebp,%edx,1),%edi
-	# Round 5
+	# Round 5 
 	movl	40(%ecx),%eax
 	xorl	%ebx,%ebx
 	movl	44(%ecx),%edx
@@ -178,7 +183,7 @@ __x86_DES_encrypt:
 	movl	(%esp),%ecx
 	xorl	0x400(%ebp,%eax,1),%esi
 	xorl	0x500(%ebp,%edx,1),%esi
-	# Round 6
+	# Round 6 
 	movl	48(%ecx),%eax
 	xorl	%ebx,%ebx
 	movl	52(%ecx),%edx
@@ -207,7 +212,7 @@ __x86_DES_encrypt:
 	movl	(%esp),%ecx
 	xorl	0x400(%ebp,%eax,1),%edi
 	xorl	0x500(%ebp,%edx,1),%edi
-	# Round 7
+	# Round 7 
 	movl	56(%ecx),%eax
 	xorl	%ebx,%ebx
 	movl	60(%ecx),%edx
@@ -236,7 +241,7 @@ __x86_DES_encrypt:
 	movl	(%esp),%ecx
 	xorl	0x400(%ebp,%eax,1),%esi
 	xorl	0x500(%ebp,%edx,1),%esi
-	# Round 8
+	# Round 8 
 	movl	64(%ecx),%eax
 	xorl	%ebx,%ebx
 	movl	68(%ecx),%edx
@@ -265,7 +270,7 @@ __x86_DES_encrypt:
 	movl	(%esp),%ecx
 	xorl	0x400(%ebp,%eax,1),%edi
 	xorl	0x500(%ebp,%edx,1),%edi
-	# Round 9
+	# Round 9 
 	movl	72(%ecx),%eax
 	xorl	%ebx,%ebx
 	movl	76(%ecx),%edx
@@ -294,7 +299,7 @@ __x86_DES_encrypt:
 	movl	(%esp),%ecx
 	xorl	0x400(%ebp,%eax,1),%esi
 	xorl	0x500(%ebp,%edx,1),%esi
-	# Round 10
+	# Round 10 
 	movl	80(%ecx),%eax
 	xorl	%ebx,%ebx
 	movl	84(%ecx),%edx
@@ -323,7 +328,7 @@ __x86_DES_encrypt:
 	movl	(%esp),%ecx
 	xorl	0x400(%ebp,%eax,1),%edi
 	xorl	0x500(%ebp,%edx,1),%edi
-	# Round 11
+	# Round 11 
 	movl	88(%ecx),%eax
 	xorl	%ebx,%ebx
 	movl	92(%ecx),%edx
@@ -352,7 +357,7 @@ __x86_DES_encrypt:
 	movl	(%esp),%ecx
 	xorl	0x400(%ebp,%eax,1),%esi
 	xorl	0x500(%ebp,%edx,1),%esi
-	# Round 12
+	# Round 12 
 	movl	96(%ecx),%eax
 	xorl	%ebx,%ebx
 	movl	100(%ecx),%edx
@@ -381,7 +386,7 @@ __x86_DES_encrypt:
 	movl	(%esp),%ecx
 	xorl	0x400(%ebp,%eax,1),%edi
 	xorl	0x500(%ebp,%edx,1),%edi
-	# Round 13
+	# Round 13 
 	movl	104(%ecx),%eax
 	xorl	%ebx,%ebx
 	movl	108(%ecx),%edx
@@ -410,7 +415,7 @@ __x86_DES_encrypt:
 	movl	(%esp),%ecx
 	xorl	0x400(%ebp,%eax,1),%esi
 	xorl	0x500(%ebp,%edx,1),%esi
-	# Round 14
+	# Round 14 
 	movl	112(%ecx),%eax
 	xorl	%ebx,%ebx
 	movl	116(%ecx),%edx
@@ -439,7 +444,7 @@ __x86_DES_encrypt:
 	movl	(%esp),%ecx
 	xorl	0x400(%ebp,%eax,1),%edi
 	xorl	0x500(%ebp,%edx,1),%edi
-	# Round 15
+	# Round 15 
 	movl	120(%ecx),%eax
 	xorl	%ebx,%ebx
 	movl	124(%ecx),%edx
@@ -473,8 +478,13 @@ __x86_DES_encrypt:
 .type	__x86_DES_decrypt,@function
 .align	4
 __x86_DES_decrypt:
+	%ifdef __CET__
+
+.byte	243,15,30,251
+	%endif
+
 	pushl	%ecx
-	# Round 15
+	# Round 15 
 	movl	120(%ecx),%eax
 	xorl	%ebx,%ebx
 	movl	124(%ecx),%edx
@@ -503,7 +513,7 @@ __x86_DES_decrypt:
 	movl	(%esp),%ecx
 	xorl	0x400(%ebp,%eax,1),%edi
 	xorl	0x500(%ebp,%edx,1),%edi
-	# Round 14
+	# Round 14 
 	movl	112(%ecx),%eax
 	xorl	%ebx,%ebx
 	movl	116(%ecx),%edx
@@ -532,7 +542,7 @@ __x86_DES_decrypt:
 	movl	(%esp),%ecx
 	xorl	0x400(%ebp,%eax,1),%esi
 	xorl	0x500(%ebp,%edx,1),%esi
-	# Round 13
+	# Round 13 
 	movl	104(%ecx),%eax
 	xorl	%ebx,%ebx
 	movl	108(%ecx),%edx
@@ -561,7 +571,7 @@ __x86_DES_decrypt:
 	movl	(%esp),%ecx
 	xorl	0x400(%ebp,%eax,1),%edi
 	xorl	0x500(%ebp,%edx,1),%edi
-	# Round 12
+	# Round 12 
 	movl	96(%ecx),%eax
 	xorl	%ebx,%ebx
 	movl	100(%ecx),%edx
@@ -590,7 +600,7 @@ __x86_DES_decrypt:
 	movl	(%esp),%ecx
 	xorl	0x400(%ebp,%eax,1),%esi
 	xorl	0x500(%ebp,%edx,1),%esi
-	# Round 11
+	# Round 11 
 	movl	88(%ecx),%eax
 	xorl	%ebx,%ebx
 	movl	92(%ecx),%edx
@@ -619,7 +629,7 @@ __x86_DES_decrypt:
 	movl	(%esp),%ecx
 	xorl	0x400(%ebp,%eax,1),%edi
 	xorl	0x500(%ebp,%edx,1),%edi
-	# Round 10
+	# Round 10 
 	movl	80(%ecx),%eax
 	xorl	%ebx,%ebx
 	movl	84(%ecx),%edx
@@ -648,7 +658,7 @@ __x86_DES_decrypt:
 	movl	(%esp),%ecx
 	xorl	0x400(%ebp,%eax,1),%esi
 	xorl	0x500(%ebp,%edx,1),%esi
-	# Round 9
+	# Round 9 
 	movl	72(%ecx),%eax
 	xorl	%ebx,%ebx
 	movl	76(%ecx),%edx
@@ -677,7 +687,7 @@ __x86_DES_decrypt:
 	movl	(%esp),%ecx
 	xorl	0x400(%ebp,%eax,1),%edi
 	xorl	0x500(%ebp,%edx,1),%edi
-	# Round 8
+	# Round 8 
 	movl	64(%ecx),%eax
 	xorl	%ebx,%ebx
 	movl	68(%ecx),%edx
@@ -706,7 +716,7 @@ __x86_DES_decrypt:
 	movl	(%esp),%ecx
 	xorl	0x400(%ebp,%eax,1),%esi
 	xorl	0x500(%ebp,%edx,1),%esi
-	# Round 7
+	# Round 7 
 	movl	56(%ecx),%eax
 	xorl	%ebx,%ebx
 	movl	60(%ecx),%edx
@@ -735,7 +745,7 @@ __x86_DES_decrypt:
 	movl	(%esp),%ecx
 	xorl	0x400(%ebp,%eax,1),%edi
 	xorl	0x500(%ebp,%edx,1),%edi
-	# Round 6
+	# Round 6 
 	movl	48(%ecx),%eax
 	xorl	%ebx,%ebx
 	movl	52(%ecx),%edx
@@ -764,7 +774,7 @@ __x86_DES_decrypt:
 	movl	(%esp),%ecx
 	xorl	0x400(%ebp,%eax,1),%esi
 	xorl	0x500(%ebp,%edx,1),%esi
-	# Round 5
+	# Round 5 
 	movl	40(%ecx),%eax
 	xorl	%ebx,%ebx
 	movl	44(%ecx),%edx
@@ -793,7 +803,7 @@ __x86_DES_decrypt:
 	movl	(%esp),%ecx
 	xorl	0x400(%ebp,%eax,1),%edi
 	xorl	0x500(%ebp,%edx,1),%edi
-	# Round 4
+	# Round 4 
 	movl	32(%ecx),%eax
 	xorl	%ebx,%ebx
 	movl	36(%ecx),%edx
@@ -822,7 +832,7 @@ __x86_DES_decrypt:
 	movl	(%esp),%ecx
 	xorl	0x400(%ebp,%eax,1),%esi
 	xorl	0x500(%ebp,%edx,1),%esi
-	# Round 3
+	# Round 3 
 	movl	24(%ecx),%eax
 	xorl	%ebx,%ebx
 	movl	28(%ecx),%edx
@@ -851,7 +861,7 @@ __x86_DES_decrypt:
 	movl	(%esp),%ecx
 	xorl	0x400(%ebp,%eax,1),%edi
 	xorl	0x500(%ebp,%edx,1),%edi
-	# Round 2
+	# Round 2 
 	movl	16(%ecx),%eax
 	xorl	%ebx,%ebx
 	movl	20(%ecx),%edx
@@ -880,7 +890,7 @@ __x86_DES_decrypt:
 	movl	(%esp),%ecx
 	xorl	0x400(%ebp,%eax,1),%esi
 	xorl	0x500(%ebp,%edx,1),%esi
-	# Round 1
+	# Round 1 
 	movl	8(%ecx),%eax
 	xorl	%ebx,%ebx
 	movl	12(%ecx),%edx
@@ -909,7 +919,7 @@ __x86_DES_decrypt:
 	movl	(%esp),%ecx
 	xorl	0x400(%ebp,%eax,1),%edi
 	xorl	0x500(%ebp,%edx,1),%edi
-	# Round 0
+	# Round 0 
 	movl	(%ecx),%eax
 	xorl	%ebx,%ebx
 	movl	4(%ecx),%edx
@@ -945,10 +955,15 @@ __x86_DES_decrypt:
 .align	4
 _DES_encrypt1:
 L_DES_encrypt1_begin:
+	%ifdef __CET__
+
+.byte	243,15,30,251
+	%endif
+
 	pushl	%esi
 	pushl	%edi
 
-	# Load the 2 words
+	# Load the 2 words 
 	movl	12(%esp),%esi
 	xorl	%ecx,%ecx
 	pushl	%ebx
@@ -957,7 +972,7 @@ L_DES_encrypt1_begin:
 	movl	28(%esp),%ebx
 	movl	4(%esi),%edi
 
-	# IP
+	# IP 
 	roll	$4,%eax
 	movl	%eax,%esi
 	xorl	%edi,%eax
@@ -1007,7 +1022,7 @@ L001decrypt:
 	call	__x86_DES_decrypt
 L002done:
 
-	# FP
+	# FP 
 	movl	20(%esp),%edx
 	rorl	$1,%esi
 	movl	%edi,%eax
@@ -1057,10 +1072,15 @@ L002done:
 .align	4
 _DES_encrypt2:
 L_DES_encrypt2_begin:
+	%ifdef __CET__
+
+.byte	243,15,30,251
+	%endif
+
 	pushl	%esi
 	pushl	%edi
 
-	# Load the 2 words
+	# Load the 2 words 
 	movl	12(%esp),%eax
 	xorl	%ecx,%ecx
 	pushl	%ebx
@@ -1083,7 +1103,7 @@ L004decrypt:
 	call	__x86_DES_decrypt
 L005done:
 
-	# Fixup
+	# Fixup 
 	rorl	$3,%edi
 	movl	20(%esp),%eax
 	rorl	$3,%esi
@@ -1099,18 +1119,23 @@ L005done:
 .align	4
 _DES_encrypt3:
 L_DES_encrypt3_begin:
+	%ifdef __CET__
+
+.byte	243,15,30,251
+	%endif
+
 	pushl	%ebx
 	movl	8(%esp),%ebx
 	pushl	%ebp
 	pushl	%esi
 	pushl	%edi
 
-	# Load the data words
+	# Load the data words 
 	movl	(%ebx),%edi
 	movl	4(%ebx),%esi
 	subl	$12,%esp
 
-	# IP
+	# IP 
 	roll	$4,%edi
 	movl	%edi,%edx
 	xorl	%esi,%edi
@@ -1169,7 +1194,7 @@ L_DES_encrypt3_begin:
 	movl	(%ebx),%edi
 	movl	4(%ebx),%esi
 
-	# FP
+	# FP 
 	roll	$2,%esi
 	roll	$3,%edi
 	movl	%edi,%eax
@@ -1219,18 +1244,23 @@ L_DES_encrypt3_begin:
 .align	4
 _DES_decrypt3:
 L_DES_decrypt3_begin:
+	%ifdef __CET__
+
+.byte	243,15,30,251
+	%endif
+
 	pushl	%ebx
 	movl	8(%esp),%ebx
 	pushl	%ebp
 	pushl	%esi
 	pushl	%edi
 
-	# Load the data words
+	# Load the data words 
 	movl	(%ebx),%edi
 	movl	4(%ebx),%esi
 	subl	$12,%esp
 
-	# IP
+	# IP 
 	roll	$4,%edi
 	movl	%edi,%edx
 	xorl	%esi,%edi
@@ -1289,7 +1319,7 @@ L_DES_decrypt3_begin:
 	movl	(%ebx),%edi
 	movl	4(%ebx),%esi
 
-	# FP
+	# FP 
 	roll	$2,%esi
 	roll	$3,%edi
 	movl	%edi,%eax
@@ -1339,13 +1369,18 @@ L_DES_decrypt3_begin:
 .align	4
 _DES_ncbc_encrypt:
 L_DES_ncbc_encrypt_begin:
+	%ifdef __CET__
+
+.byte	243,15,30,251
+	%endif
+
 
 	pushl	%ebp
 	pushl	%ebx
 	pushl	%esi
 	pushl	%edi
 	movl	28(%esp),%ebp
-	# getting iv ptr from parameter 4
+	# getting iv ptr from parameter 4 
 	movl	36(%esp),%ebx
 	movl	(%ebx),%esi
 	movl	4(%ebx),%edi
@@ -1356,11 +1391,11 @@ L_DES_ncbc_encrypt_begin:
 	movl	%esp,%ebx
 	movl	36(%esp),%esi
 	movl	40(%esp),%edi
-	# getting encrypt flag from parameter 5
+	# getting encrypt flag from parameter 5 
 	movl	56(%esp),%ecx
-	# get and push parameter 5
+	# get and push parameter 5 
 	pushl	%ecx
-	# get and push parameter 3
+	# get and push parameter 3 
 	movl	52(%esp),%eax
 	pushl	%eax
 	pushl	%ebx
@@ -1400,21 +1435,56 @@ L010PIC_point:
 	xorl	%edx,%edx
 	jmp	*%ebp
 L012ej7:
+	%ifdef __CET__
+
+.byte	243,15,30,251
+	%endif
+
 	movb	6(%esi),%dh
 	shll	$8,%edx
 L013ej6:
+	%ifdef __CET__
+
+.byte	243,15,30,251
+	%endif
+
 	movb	5(%esi),%dh
 L014ej5:
+	%ifdef __CET__
+
+.byte	243,15,30,251
+	%endif
+
 	movb	4(%esi),%dl
 L015ej4:
+	%ifdef __CET__
+
+.byte	243,15,30,251
+	%endif
+
 	movl	(%esi),%ecx
 	jmp	L016ejend
 L017ej3:
+	%ifdef __CET__
+
+.byte	243,15,30,251
+	%endif
+
 	movb	2(%esi),%ch
 	shll	$8,%ecx
 L018ej2:
+	%ifdef __CET__
+
+.byte	243,15,30,251
+	%endif
+
 	movb	1(%esi),%ch
 L019ej1:
+	%ifdef __CET__
+
+.byte	243,15,30,251
+	%endif
+
 	movb	(%esi),%cl
 L016ejend:
 	xorl	%ecx,%eax
@@ -1518,13 +1588,18 @@ L011cbc_enc_jmp_table:
 .align	4
 _DES_ede3_cbc_encrypt:
 L_DES_ede3_cbc_encrypt_begin:
+	%ifdef __CET__
+
+.byte	243,15,30,251
+	%endif
+
 
 	pushl	%ebp
 	pushl	%ebx
 	pushl	%esi
 	pushl	%edi
 	movl	28(%esp),%ebp
-	# getting iv ptr from parameter 6
+	# getting iv ptr from parameter 6 
 	movl	44(%esp),%ebx
 	movl	(%ebx),%esi
 	movl	4(%ebx),%edi
@@ -1535,15 +1610,15 @@ L_DES_ede3_cbc_encrypt_begin:
 	movl	%esp,%ebx
 	movl	36(%esp),%esi
 	movl	40(%esp),%edi
-	# getting encrypt flag from parameter 7
+	# getting encrypt flag from parameter 7 
 	movl	64(%esp),%ecx
-	# get and push parameter 5
+	# get and push parameter 5 
 	movl	56(%esp),%eax
 	pushl	%eax
-	# get and push parameter 4
+	# get and push parameter 4 
 	movl	56(%esp),%eax
 	pushl	%eax
-	# get and push parameter 3
+	# get and push parameter 3 
 	movl	56(%esp),%eax
 	pushl	%eax
 	pushl	%ebx
@@ -1583,21 +1658,56 @@ L034PIC_point:
 	xorl	%edx,%edx
 	jmp	*%ebp
 L036ej7:
+	%ifdef __CET__
+
+.byte	243,15,30,251
+	%endif
+
 	movb	6(%esi),%dh
 	shll	$8,%edx
 L037ej6:
+	%ifdef __CET__
+
+.byte	243,15,30,251
+	%endif
+
 	movb	5(%esi),%dh
 L038ej5:
+	%ifdef __CET__
+
+.byte	243,15,30,251
+	%endif
+
 	movb	4(%esi),%dl
 L039ej4:
+	%ifdef __CET__
+
+.byte	243,15,30,251
+	%endif
+
 	movl	(%esi),%ecx
 	jmp	L040ejend
 L041ej3:
+	%ifdef __CET__
+
+.byte	243,15,30,251
+	%endif
+
 	movb	2(%esi),%ch
 	shll	$8,%ecx
 L042ej2:
+	%ifdef __CET__
+
+.byte	243,15,30,251
+	%endif
+
 	movb	1(%esi),%ch
 L043ej1:
+	%ifdef __CET__
+
+.byte	243,15,30,251
+	%endif
+
 	movb	(%esi),%cl
 L040ejend:
 	xorl	%ecx,%eax

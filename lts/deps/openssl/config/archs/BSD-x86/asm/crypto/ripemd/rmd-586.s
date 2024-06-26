@@ -4,6 +4,11 @@
 .align	4
 _ripemd160_block_asm_data_order:
 L_ripemd160_block_asm_data_order_begin:
+	%ifdef __CET__
+
+.byte	243,15,30,251
+	%endif
+
 	movl	4(%esp),%edx
 	movl	8(%esp),%eax
 	pushl	%esi
@@ -51,7 +56,7 @@ L000start:
 	movl	%edi,%eax
 	movl	12(%edx),%ebx
 	movl	16(%edx),%ebp
-	# 0
+	# 0 
 	xorl	%ebx,%eax
 	movl	(%esp),%edx
 	xorl	%esi,%eax
@@ -61,7 +66,7 @@ L000start:
 	movl	%esi,%eax
 	roll	$11,%ecx
 	addl	%ebp,%ecx
-	# 1
+	# 1 
 	xorl	%edi,%eax
 	movl	4(%esp),%edx
 	xorl	%ecx,%eax
@@ -72,7 +77,7 @@ L000start:
 	xorl	%esi,%eax
 	roll	$14,%ebp
 	addl	%ebx,%ebp
-	# 2
+	# 2 
 	movl	8(%esp),%edx
 	xorl	%ebp,%eax
 	addl	%edx,%ebx
@@ -81,7 +86,7 @@ L000start:
 	movl	%ebp,%eax
 	roll	$15,%ebx
 	addl	%edi,%ebx
-	# 3
+	# 3 
 	xorl	%ecx,%eax
 	movl	12(%esp),%edx
 	xorl	%ebx,%eax
@@ -92,7 +97,7 @@ L000start:
 	xorl	%ebp,%eax
 	roll	$12,%edi
 	addl	%esi,%edi
-	# 4
+	# 4 
 	movl	16(%esp),%edx
 	xorl	%edi,%eax
 	addl	%edx,%esi
@@ -101,7 +106,7 @@ L000start:
 	movl	%edi,%eax
 	roll	$5,%esi
 	addl	%ecx,%esi
-	# 5
+	# 5 
 	xorl	%ebx,%eax
 	movl	20(%esp),%edx
 	xorl	%esi,%eax
@@ -112,7 +117,7 @@ L000start:
 	xorl	%edi,%eax
 	roll	$8,%ecx
 	addl	%ebp,%ecx
-	# 6
+	# 6 
 	movl	24(%esp),%edx
 	xorl	%ecx,%eax
 	addl	%edx,%ebp
@@ -121,7 +126,7 @@ L000start:
 	movl	%ecx,%eax
 	roll	$7,%ebp
 	addl	%ebx,%ebp
-	# 7
+	# 7 
 	xorl	%esi,%eax
 	movl	28(%esp),%edx
 	xorl	%ebp,%eax
@@ -132,7 +137,7 @@ L000start:
 	xorl	%ecx,%eax
 	roll	$9,%ebx
 	addl	%edi,%ebx
-	# 8
+	# 8 
 	movl	32(%esp),%edx
 	xorl	%ebx,%eax
 	addl	%edx,%edi
@@ -141,7 +146,7 @@ L000start:
 	movl	%ebx,%eax
 	roll	$11,%edi
 	addl	%esi,%edi
-	# 9
+	# 9 
 	xorl	%ebp,%eax
 	movl	36(%esp),%edx
 	xorl	%edi,%eax
@@ -152,7 +157,7 @@ L000start:
 	xorl	%ebx,%eax
 	roll	$13,%esi
 	addl	%ecx,%esi
-	# 10
+	# 10 
 	movl	40(%esp),%edx
 	xorl	%esi,%eax
 	addl	%edx,%ecx
@@ -161,7 +166,7 @@ L000start:
 	movl	%esi,%eax
 	roll	$14,%ecx
 	addl	%ebp,%ecx
-	# 11
+	# 11 
 	xorl	%edi,%eax
 	movl	44(%esp),%edx
 	xorl	%ecx,%eax
@@ -172,7 +177,7 @@ L000start:
 	xorl	%esi,%eax
 	roll	$15,%ebp
 	addl	%ebx,%ebp
-	# 12
+	# 12 
 	movl	48(%esp),%edx
 	xorl	%ebp,%eax
 	addl	%edx,%ebx
@@ -181,7 +186,7 @@ L000start:
 	movl	%ebp,%eax
 	roll	$6,%ebx
 	addl	%edi,%ebx
-	# 13
+	# 13 
 	xorl	%ecx,%eax
 	movl	52(%esp),%edx
 	xorl	%ebx,%eax
@@ -192,7 +197,7 @@ L000start:
 	xorl	%ebp,%eax
 	roll	$7,%edi
 	addl	%esi,%edi
-	# 14
+	# 14 
 	movl	56(%esp),%edx
 	xorl	%edi,%eax
 	addl	%edx,%esi
@@ -201,7 +206,7 @@ L000start:
 	movl	%edi,%eax
 	roll	$9,%esi
 	addl	%ecx,%esi
-	# 15
+	# 15 
 	xorl	%ebx,%eax
 	movl	60(%esp),%edx
 	xorl	%esi,%eax
@@ -212,7 +217,7 @@ L000start:
 	movl	28(%esp),%edx
 	roll	$8,%ecx
 	addl	%ebp,%ecx
-	# 16
+	# 16 
 	addl	%edx,%ebp
 	movl	%esi,%edx
 	subl	%ecx,%eax
@@ -225,7 +230,7 @@ L000start:
 	movl	$-1,%edx
 	roll	$7,%ebp
 	addl	%ebx,%ebp
-	# 17
+	# 17 
 	addl	%eax,%ebx
 	movl	%ecx,%eax
 	subl	%ebp,%edx
@@ -238,7 +243,7 @@ L000start:
 	movl	$-1,%eax
 	roll	$6,%ebx
 	addl	%edi,%ebx
-	# 18
+	# 18 
 	addl	%edx,%edi
 	movl	%ebp,%edx
 	subl	%ebx,%eax
@@ -251,7 +256,7 @@ L000start:
 	movl	$-1,%edx
 	roll	$8,%edi
 	addl	%esi,%edi
-	# 19
+	# 19 
 	addl	%eax,%esi
 	movl	%ebx,%eax
 	subl	%edi,%edx
@@ -264,7 +269,7 @@ L000start:
 	movl	$-1,%eax
 	roll	$13,%esi
 	addl	%ecx,%esi
-	# 20
+	# 20 
 	addl	%edx,%ecx
 	movl	%edi,%edx
 	subl	%esi,%eax
@@ -277,7 +282,7 @@ L000start:
 	movl	$-1,%edx
 	roll	$11,%ecx
 	addl	%ebp,%ecx
-	# 21
+	# 21 
 	addl	%eax,%ebp
 	movl	%esi,%eax
 	subl	%ecx,%edx
@@ -290,7 +295,7 @@ L000start:
 	movl	$-1,%eax
 	roll	$9,%ebp
 	addl	%ebx,%ebp
-	# 22
+	# 22 
 	addl	%edx,%ebx
 	movl	%ecx,%edx
 	subl	%ebp,%eax
@@ -303,7 +308,7 @@ L000start:
 	movl	$-1,%edx
 	roll	$7,%ebx
 	addl	%edi,%ebx
-	# 23
+	# 23 
 	addl	%eax,%edi
 	movl	%ebp,%eax
 	subl	%ebx,%edx
@@ -316,7 +321,7 @@ L000start:
 	movl	$-1,%eax
 	roll	$15,%edi
 	addl	%esi,%edi
-	# 24
+	# 24 
 	addl	%edx,%esi
 	movl	%ebx,%edx
 	subl	%edi,%eax
@@ -329,7 +334,7 @@ L000start:
 	movl	$-1,%edx
 	roll	$7,%esi
 	addl	%ecx,%esi
-	# 25
+	# 25 
 	addl	%eax,%ecx
 	movl	%edi,%eax
 	subl	%esi,%edx
@@ -342,7 +347,7 @@ L000start:
 	movl	$-1,%eax
 	roll	$12,%ecx
 	addl	%ebp,%ecx
-	# 26
+	# 26 
 	addl	%edx,%ebp
 	movl	%esi,%edx
 	subl	%ecx,%eax
@@ -355,7 +360,7 @@ L000start:
 	movl	$-1,%edx
 	roll	$15,%ebp
 	addl	%ebx,%ebp
-	# 27
+	# 27 
 	addl	%eax,%ebx
 	movl	%ecx,%eax
 	subl	%ebp,%edx
@@ -368,7 +373,7 @@ L000start:
 	movl	$-1,%eax
 	roll	$9,%ebx
 	addl	%edi,%ebx
-	# 28
+	# 28 
 	addl	%edx,%edi
 	movl	%ebp,%edx
 	subl	%ebx,%eax
@@ -381,7 +386,7 @@ L000start:
 	movl	$-1,%edx
 	roll	$11,%edi
 	addl	%esi,%edi
-	# 29
+	# 29 
 	addl	%eax,%esi
 	movl	%ebx,%eax
 	subl	%edi,%edx
@@ -394,7 +399,7 @@ L000start:
 	movl	$-1,%eax
 	roll	$7,%esi
 	addl	%ecx,%esi
-	# 30
+	# 30 
 	addl	%edx,%ecx
 	movl	%edi,%edx
 	subl	%esi,%eax
@@ -407,7 +412,7 @@ L000start:
 	movl	$-1,%edx
 	roll	$13,%ecx
 	addl	%ebp,%ecx
-	# 31
+	# 31 
 	addl	%eax,%ebp
 	movl	%esi,%eax
 	subl	%ecx,%edx
@@ -420,7 +425,7 @@ L000start:
 	subl	%ecx,%edx
 	roll	$12,%ebp
 	addl	%ebx,%ebp
-	# 32
+	# 32 
 	movl	12(%esp),%eax
 	orl	%ebp,%edx
 	addl	%eax,%ebx
@@ -431,7 +436,7 @@ L000start:
 	subl	%ebp,%eax
 	roll	$11,%ebx
 	addl	%edi,%ebx
-	# 33
+	# 33 
 	movl	40(%esp),%edx
 	orl	%ebx,%eax
 	addl	%edx,%edi
@@ -442,7 +447,7 @@ L000start:
 	subl	%ebx,%edx
 	roll	$13,%edi
 	addl	%esi,%edi
-	# 34
+	# 34 
 	movl	56(%esp),%eax
 	orl	%edi,%edx
 	addl	%eax,%esi
@@ -453,7 +458,7 @@ L000start:
 	subl	%edi,%eax
 	roll	$6,%esi
 	addl	%ecx,%esi
-	# 35
+	# 35 
 	movl	16(%esp),%edx
 	orl	%esi,%eax
 	addl	%edx,%ecx
@@ -464,7 +469,7 @@ L000start:
 	subl	%esi,%edx
 	roll	$7,%ecx
 	addl	%ebp,%ecx
-	# 36
+	# 36 
 	movl	36(%esp),%eax
 	orl	%ecx,%edx
 	addl	%eax,%ebp
@@ -475,7 +480,7 @@ L000start:
 	subl	%ecx,%eax
 	roll	$14,%ebp
 	addl	%ebx,%ebp
-	# 37
+	# 37 
 	movl	60(%esp),%edx
 	orl	%ebp,%eax
 	addl	%edx,%ebx
@@ -486,7 +491,7 @@ L000start:
 	subl	%ebp,%edx
 	roll	$9,%ebx
 	addl	%edi,%ebx
-	# 38
+	# 38 
 	movl	32(%esp),%eax
 	orl	%ebx,%edx
 	addl	%eax,%edi
@@ -497,7 +502,7 @@ L000start:
 	subl	%ebx,%eax
 	roll	$13,%edi
 	addl	%esi,%edi
-	# 39
+	# 39 
 	movl	4(%esp),%edx
 	orl	%edi,%eax
 	addl	%edx,%esi
@@ -508,7 +513,7 @@ L000start:
 	subl	%edi,%edx
 	roll	$15,%esi
 	addl	%ecx,%esi
-	# 40
+	# 40 
 	movl	8(%esp),%eax
 	orl	%esi,%edx
 	addl	%eax,%ecx
@@ -519,7 +524,7 @@ L000start:
 	subl	%esi,%eax
 	roll	$14,%ecx
 	addl	%ebp,%ecx
-	# 41
+	# 41 
 	movl	28(%esp),%edx
 	orl	%ecx,%eax
 	addl	%edx,%ebp
@@ -530,7 +535,7 @@ L000start:
 	subl	%ecx,%edx
 	roll	$8,%ebp
 	addl	%ebx,%ebp
-	# 42
+	# 42 
 	movl	(%esp),%eax
 	orl	%ebp,%edx
 	addl	%eax,%ebx
@@ -541,7 +546,7 @@ L000start:
 	subl	%ebp,%eax
 	roll	$13,%ebx
 	addl	%edi,%ebx
-	# 43
+	# 43 
 	movl	24(%esp),%edx
 	orl	%ebx,%eax
 	addl	%edx,%edi
@@ -552,7 +557,7 @@ L000start:
 	subl	%ebx,%edx
 	roll	$6,%edi
 	addl	%esi,%edi
-	# 44
+	# 44 
 	movl	52(%esp),%eax
 	orl	%edi,%edx
 	addl	%eax,%esi
@@ -563,7 +568,7 @@ L000start:
 	subl	%edi,%eax
 	roll	$5,%esi
 	addl	%ecx,%esi
-	# 45
+	# 45 
 	movl	44(%esp),%edx
 	orl	%esi,%eax
 	addl	%edx,%ecx
@@ -574,7 +579,7 @@ L000start:
 	subl	%esi,%edx
 	roll	$12,%ecx
 	addl	%ebp,%ecx
-	# 46
+	# 46 
 	movl	20(%esp),%eax
 	orl	%ecx,%edx
 	addl	%eax,%ebp
@@ -585,7 +590,7 @@ L000start:
 	subl	%ecx,%eax
 	roll	$7,%ebp
 	addl	%ebx,%ebp
-	# 47
+	# 47 
 	movl	48(%esp),%edx
 	orl	%ebp,%eax
 	addl	%edx,%ebx
@@ -596,7 +601,7 @@ L000start:
 	movl	%ecx,%eax
 	roll	$5,%ebx
 	addl	%edi,%ebx
-	# 48
+	# 48 
 	subl	%ecx,%edx
 	andl	%ebx,%eax
 	andl	%ebp,%edx
@@ -609,7 +614,7 @@ L000start:
 	movl	%ebp,%eax
 	roll	$11,%edi
 	addl	%esi,%edi
-	# 49
+	# 49 
 	subl	%ebp,%edx
 	andl	%edi,%eax
 	andl	%ebx,%edx
@@ -622,7 +627,7 @@ L000start:
 	movl	%ebx,%eax
 	roll	$12,%esi
 	addl	%ecx,%esi
-	# 50
+	# 50 
 	subl	%ebx,%edx
 	andl	%esi,%eax
 	andl	%edi,%edx
@@ -635,7 +640,7 @@ L000start:
 	movl	%edi,%eax
 	roll	$14,%ecx
 	addl	%ebp,%ecx
-	# 51
+	# 51 
 	subl	%edi,%edx
 	andl	%ecx,%eax
 	andl	%esi,%edx
@@ -648,7 +653,7 @@ L000start:
 	movl	%esi,%eax
 	roll	$15,%ebp
 	addl	%ebx,%ebp
-	# 52
+	# 52 
 	subl	%esi,%edx
 	andl	%ebp,%eax
 	andl	%ecx,%edx
@@ -661,7 +666,7 @@ L000start:
 	movl	%ecx,%eax
 	roll	$14,%ebx
 	addl	%edi,%ebx
-	# 53
+	# 53 
 	subl	%ecx,%edx
 	andl	%ebx,%eax
 	andl	%ebp,%edx
@@ -674,7 +679,7 @@ L000start:
 	movl	%ebp,%eax
 	roll	$15,%edi
 	addl	%esi,%edi
-	# 54
+	# 54 
 	subl	%ebp,%edx
 	andl	%edi,%eax
 	andl	%ebx,%edx
@@ -687,7 +692,7 @@ L000start:
 	movl	%ebx,%eax
 	roll	$9,%esi
 	addl	%ecx,%esi
-	# 55
+	# 55 
 	subl	%ebx,%edx
 	andl	%esi,%eax
 	andl	%edi,%edx
@@ -700,7 +705,7 @@ L000start:
 	movl	%edi,%eax
 	roll	$8,%ecx
 	addl	%ebp,%ecx
-	# 56
+	# 56 
 	subl	%edi,%edx
 	andl	%ecx,%eax
 	andl	%esi,%edx
@@ -713,7 +718,7 @@ L000start:
 	movl	%esi,%eax
 	roll	$9,%ebp
 	addl	%ebx,%ebp
-	# 57
+	# 57 
 	subl	%esi,%edx
 	andl	%ebp,%eax
 	andl	%ecx,%edx
@@ -726,7 +731,7 @@ L000start:
 	movl	%ecx,%eax
 	roll	$14,%ebx
 	addl	%edi,%ebx
-	# 58
+	# 58 
 	subl	%ecx,%edx
 	andl	%ebx,%eax
 	andl	%ebp,%edx
@@ -739,7 +744,7 @@ L000start:
 	movl	%ebp,%eax
 	roll	$5,%edi
 	addl	%esi,%edi
-	# 59
+	# 59 
 	subl	%ebp,%edx
 	andl	%edi,%eax
 	andl	%ebx,%edx
@@ -752,7 +757,7 @@ L000start:
 	movl	%ebx,%eax
 	roll	$6,%esi
 	addl	%ecx,%esi
-	# 60
+	# 60 
 	subl	%ebx,%edx
 	andl	%esi,%eax
 	andl	%edi,%edx
@@ -765,7 +770,7 @@ L000start:
 	movl	%edi,%eax
 	roll	$8,%ecx
 	addl	%ebp,%ecx
-	# 61
+	# 61 
 	subl	%edi,%edx
 	andl	%ecx,%eax
 	andl	%esi,%edx
@@ -778,7 +783,7 @@ L000start:
 	movl	%esi,%eax
 	roll	$6,%ebp
 	addl	%ebx,%ebp
-	# 62
+	# 62 
 	subl	%esi,%edx
 	andl	%ebp,%eax
 	andl	%ecx,%edx
@@ -791,7 +796,7 @@ L000start:
 	movl	%ecx,%eax
 	roll	$5,%ebx
 	addl	%edi,%ebx
-	# 63
+	# 63 
 	subl	%ecx,%edx
 	andl	%ebx,%eax
 	andl	%ebp,%edx
@@ -804,7 +809,7 @@ L000start:
 	subl	%ebp,%edx
 	roll	$12,%edi
 	addl	%esi,%edi
-	# 64
+	# 64 
 	movl	16(%esp),%eax
 	orl	%ebx,%edx
 	addl	%eax,%esi
@@ -815,7 +820,7 @@ L000start:
 	subl	%ebx,%eax
 	roll	$9,%esi
 	addl	%ecx,%esi
-	# 65
+	# 65 
 	movl	(%esp),%edx
 	orl	%edi,%eax
 	addl	%edx,%ecx
@@ -826,7 +831,7 @@ L000start:
 	subl	%edi,%edx
 	roll	$15,%ecx
 	addl	%ebp,%ecx
-	# 66
+	# 66 
 	movl	20(%esp),%eax
 	orl	%esi,%edx
 	addl	%eax,%ebp
@@ -837,7 +842,7 @@ L000start:
 	subl	%esi,%eax
 	roll	$5,%ebp
 	addl	%ebx,%ebp
-	# 67
+	# 67 
 	movl	36(%esp),%edx
 	orl	%ecx,%eax
 	addl	%edx,%ebx
@@ -848,7 +853,7 @@ L000start:
 	subl	%ecx,%edx
 	roll	$11,%ebx
 	addl	%edi,%ebx
-	# 68
+	# 68 
 	movl	28(%esp),%eax
 	orl	%ebp,%edx
 	addl	%eax,%edi
@@ -859,7 +864,7 @@ L000start:
 	subl	%ebp,%eax
 	roll	$6,%edi
 	addl	%esi,%edi
-	# 69
+	# 69 
 	movl	48(%esp),%edx
 	orl	%ebx,%eax
 	addl	%edx,%esi
@@ -870,7 +875,7 @@ L000start:
 	subl	%ebx,%edx
 	roll	$8,%esi
 	addl	%ecx,%esi
-	# 70
+	# 70 
 	movl	8(%esp),%eax
 	orl	%edi,%edx
 	addl	%eax,%ecx
@@ -881,7 +886,7 @@ L000start:
 	subl	%edi,%eax
 	roll	$13,%ecx
 	addl	%ebp,%ecx
-	# 71
+	# 71 
 	movl	40(%esp),%edx
 	orl	%esi,%eax
 	addl	%edx,%ebp
@@ -892,7 +897,7 @@ L000start:
 	subl	%esi,%edx
 	roll	$12,%ebp
 	addl	%ebx,%ebp
-	# 72
+	# 72 
 	movl	56(%esp),%eax
 	orl	%ecx,%edx
 	addl	%eax,%ebx
@@ -903,7 +908,7 @@ L000start:
 	subl	%ecx,%eax
 	roll	$5,%ebx
 	addl	%edi,%ebx
-	# 73
+	# 73 
 	movl	4(%esp),%edx
 	orl	%ebp,%eax
 	addl	%edx,%edi
@@ -914,7 +919,7 @@ L000start:
 	subl	%ebp,%edx
 	roll	$12,%edi
 	addl	%esi,%edi
-	# 74
+	# 74 
 	movl	12(%esp),%eax
 	orl	%ebx,%edx
 	addl	%eax,%esi
@@ -925,7 +930,7 @@ L000start:
 	subl	%ebx,%eax
 	roll	$13,%esi
 	addl	%ecx,%esi
-	# 75
+	# 75 
 	movl	32(%esp),%edx
 	orl	%edi,%eax
 	addl	%edx,%ecx
@@ -936,7 +941,7 @@ L000start:
 	subl	%edi,%edx
 	roll	$14,%ecx
 	addl	%ebp,%ecx
-	# 76
+	# 76 
 	movl	44(%esp),%eax
 	orl	%esi,%edx
 	addl	%eax,%ebp
@@ -947,7 +952,7 @@ L000start:
 	subl	%esi,%eax
 	roll	$11,%ebp
 	addl	%ebx,%ebp
-	# 77
+	# 77 
 	movl	24(%esp),%edx
 	orl	%ecx,%eax
 	addl	%edx,%ebx
@@ -958,7 +963,7 @@ L000start:
 	subl	%ecx,%edx
 	roll	$8,%ebx
 	addl	%edi,%ebx
-	# 78
+	# 78 
 	movl	60(%esp),%eax
 	orl	%ebp,%edx
 	addl	%eax,%edi
@@ -969,7 +974,7 @@ L000start:
 	subl	%ebp,%eax
 	roll	$5,%edi
 	addl	%esi,%edi
-	# 79
+	# 79 
 	movl	52(%esp),%edx
 	orl	%ebx,%eax
 	addl	%edx,%esi
@@ -989,7 +994,7 @@ L000start:
 	movl	%ebp,80(%esp)
 	movl	12(%edx),%ebx
 	movl	16(%edx),%ebp
-	# 80
+	# 80 
 	movl	$-1,%edx
 	subl	%ebx,%edx
 	movl	20(%esp),%eax
@@ -1002,7 +1007,7 @@ L000start:
 	subl	%edi,%eax
 	roll	$8,%ecx
 	addl	%ebp,%ecx
-	# 81
+	# 81 
 	movl	56(%esp),%edx
 	orl	%esi,%eax
 	addl	%edx,%ebp
@@ -1013,7 +1018,7 @@ L000start:
 	subl	%esi,%edx
 	roll	$9,%ebp
 	addl	%ebx,%ebp
-	# 82
+	# 82 
 	movl	28(%esp),%eax
 	orl	%ecx,%edx
 	addl	%eax,%ebx
@@ -1024,7 +1029,7 @@ L000start:
 	subl	%ecx,%eax
 	roll	$9,%ebx
 	addl	%edi,%ebx
-	# 83
+	# 83 
 	movl	(%esp),%edx
 	orl	%ebp,%eax
 	addl	%edx,%edi
@@ -1035,7 +1040,7 @@ L000start:
 	subl	%ebp,%edx
 	roll	$11,%edi
 	addl	%esi,%edi
-	# 84
+	# 84 
 	movl	36(%esp),%eax
 	orl	%ebx,%edx
 	addl	%eax,%esi
@@ -1046,7 +1051,7 @@ L000start:
 	subl	%ebx,%eax
 	roll	$13,%esi
 	addl	%ecx,%esi
-	# 85
+	# 85 
 	movl	8(%esp),%edx
 	orl	%edi,%eax
 	addl	%edx,%ecx
@@ -1057,7 +1062,7 @@ L000start:
 	subl	%edi,%edx
 	roll	$15,%ecx
 	addl	%ebp,%ecx
-	# 86
+	# 86 
 	movl	44(%esp),%eax
 	orl	%esi,%edx
 	addl	%eax,%ebp
@@ -1068,7 +1073,7 @@ L000start:
 	subl	%esi,%eax
 	roll	$15,%ebp
 	addl	%ebx,%ebp
-	# 87
+	# 87 
 	movl	16(%esp),%edx
 	orl	%ecx,%eax
 	addl	%edx,%ebx
@@ -1079,7 +1084,7 @@ L000start:
 	subl	%ecx,%edx
 	roll	$5,%ebx
 	addl	%edi,%ebx
-	# 88
+	# 88 
 	movl	52(%esp),%eax
 	orl	%ebp,%edx
 	addl	%eax,%edi
@@ -1090,7 +1095,7 @@ L000start:
 	subl	%ebp,%eax
 	roll	$7,%edi
 	addl	%esi,%edi
-	# 89
+	# 89 
 	movl	24(%esp),%edx
 	orl	%ebx,%eax
 	addl	%edx,%esi
@@ -1101,7 +1106,7 @@ L000start:
 	subl	%ebx,%edx
 	roll	$7,%esi
 	addl	%ecx,%esi
-	# 90
+	# 90 
 	movl	60(%esp),%eax
 	orl	%edi,%edx
 	addl	%eax,%ecx
@@ -1112,7 +1117,7 @@ L000start:
 	subl	%edi,%eax
 	roll	$8,%ecx
 	addl	%ebp,%ecx
-	# 91
+	# 91 
 	movl	32(%esp),%edx
 	orl	%esi,%eax
 	addl	%edx,%ebp
@@ -1123,7 +1128,7 @@ L000start:
 	subl	%esi,%edx
 	roll	$11,%ebp
 	addl	%ebx,%ebp
-	# 92
+	# 92 
 	movl	4(%esp),%eax
 	orl	%ecx,%edx
 	addl	%eax,%ebx
@@ -1134,7 +1139,7 @@ L000start:
 	subl	%ecx,%eax
 	roll	$14,%ebx
 	addl	%edi,%ebx
-	# 93
+	# 93 
 	movl	40(%esp),%edx
 	orl	%ebp,%eax
 	addl	%edx,%edi
@@ -1145,7 +1150,7 @@ L000start:
 	subl	%ebp,%edx
 	roll	$14,%edi
 	addl	%esi,%edi
-	# 94
+	# 94 
 	movl	12(%esp),%eax
 	orl	%ebx,%edx
 	addl	%eax,%esi
@@ -1156,7 +1161,7 @@ L000start:
 	subl	%ebx,%eax
 	roll	$12,%esi
 	addl	%ecx,%esi
-	# 95
+	# 95 
 	movl	48(%esp),%edx
 	orl	%edi,%eax
 	addl	%edx,%ecx
@@ -1167,7 +1172,7 @@ L000start:
 	movl	%edi,%eax
 	roll	$6,%ecx
 	addl	%ebp,%ecx
-	# 96
+	# 96 
 	subl	%edi,%edx
 	andl	%ecx,%eax
 	andl	%esi,%edx
@@ -1180,7 +1185,7 @@ L000start:
 	movl	%esi,%eax
 	roll	$9,%ebp
 	addl	%ebx,%ebp
-	# 97
+	# 97 
 	subl	%esi,%edx
 	andl	%ebp,%eax
 	andl	%ecx,%edx
@@ -1193,7 +1198,7 @@ L000start:
 	movl	%ecx,%eax
 	roll	$13,%ebx
 	addl	%edi,%ebx
-	# 98
+	# 98 
 	subl	%ecx,%edx
 	andl	%ebx,%eax
 	andl	%ebp,%edx
@@ -1206,7 +1211,7 @@ L000start:
 	movl	%ebp,%eax
 	roll	$15,%edi
 	addl	%esi,%edi
-	# 99
+	# 99 
 	subl	%ebp,%edx
 	andl	%edi,%eax
 	andl	%ebx,%edx
@@ -1219,7 +1224,7 @@ L000start:
 	movl	%ebx,%eax
 	roll	$7,%esi
 	addl	%ecx,%esi
-	# 100
+	# 100 
 	subl	%ebx,%edx
 	andl	%esi,%eax
 	andl	%edi,%edx
@@ -1232,7 +1237,7 @@ L000start:
 	movl	%edi,%eax
 	roll	$12,%ecx
 	addl	%ebp,%ecx
-	# 101
+	# 101 
 	subl	%edi,%edx
 	andl	%ecx,%eax
 	andl	%esi,%edx
@@ -1245,7 +1250,7 @@ L000start:
 	movl	%esi,%eax
 	roll	$8,%ebp
 	addl	%ebx,%ebp
-	# 102
+	# 102 
 	subl	%esi,%edx
 	andl	%ebp,%eax
 	andl	%ecx,%edx
@@ -1258,7 +1263,7 @@ L000start:
 	movl	%ecx,%eax
 	roll	$9,%ebx
 	addl	%edi,%ebx
-	# 103
+	# 103 
 	subl	%ecx,%edx
 	andl	%ebx,%eax
 	andl	%ebp,%edx
@@ -1271,7 +1276,7 @@ L000start:
 	movl	%ebp,%eax
 	roll	$11,%edi
 	addl	%esi,%edi
-	# 104
+	# 104 
 	subl	%ebp,%edx
 	andl	%edi,%eax
 	andl	%ebx,%edx
@@ -1284,7 +1289,7 @@ L000start:
 	movl	%ebx,%eax
 	roll	$7,%esi
 	addl	%ecx,%esi
-	# 105
+	# 105 
 	subl	%ebx,%edx
 	andl	%esi,%eax
 	andl	%edi,%edx
@@ -1297,7 +1302,7 @@ L000start:
 	movl	%edi,%eax
 	roll	$7,%ecx
 	addl	%ebp,%ecx
-	# 106
+	# 106 
 	subl	%edi,%edx
 	andl	%ecx,%eax
 	andl	%esi,%edx
@@ -1310,7 +1315,7 @@ L000start:
 	movl	%esi,%eax
 	roll	$12,%ebp
 	addl	%ebx,%ebp
-	# 107
+	# 107 
 	subl	%esi,%edx
 	andl	%ebp,%eax
 	andl	%ecx,%edx
@@ -1323,7 +1328,7 @@ L000start:
 	movl	%ecx,%eax
 	roll	$7,%ebx
 	addl	%edi,%ebx
-	# 108
+	# 108 
 	subl	%ecx,%edx
 	andl	%ebx,%eax
 	andl	%ebp,%edx
@@ -1336,7 +1341,7 @@ L000start:
 	movl	%ebp,%eax
 	roll	$6,%edi
 	addl	%esi,%edi
-	# 109
+	# 109 
 	subl	%ebp,%edx
 	andl	%edi,%eax
 	andl	%ebx,%edx
@@ -1349,7 +1354,7 @@ L000start:
 	movl	%ebx,%eax
 	roll	$15,%esi
 	addl	%ecx,%esi
-	# 110
+	# 110 
 	subl	%ebx,%edx
 	andl	%esi,%eax
 	andl	%edi,%edx
@@ -1362,7 +1367,7 @@ L000start:
 	movl	%edi,%eax
 	roll	$13,%ecx
 	addl	%ebp,%ecx
-	# 111
+	# 111 
 	subl	%edi,%edx
 	andl	%ecx,%eax
 	andl	%esi,%edx
@@ -1375,7 +1380,7 @@ L000start:
 	subl	%ecx,%edx
 	roll	$11,%ebp
 	addl	%ebx,%ebp
-	# 112
+	# 112 
 	movl	60(%esp),%eax
 	orl	%ebp,%edx
 	addl	%eax,%ebx
@@ -1386,7 +1391,7 @@ L000start:
 	subl	%ebp,%eax
 	roll	$9,%ebx
 	addl	%edi,%ebx
-	# 113
+	# 113 
 	movl	20(%esp),%edx
 	orl	%ebx,%eax
 	addl	%edx,%edi
@@ -1397,7 +1402,7 @@ L000start:
 	subl	%ebx,%edx
 	roll	$7,%edi
 	addl	%esi,%edi
-	# 114
+	# 114 
 	movl	4(%esp),%eax
 	orl	%edi,%edx
 	addl	%eax,%esi
@@ -1408,7 +1413,7 @@ L000start:
 	subl	%edi,%eax
 	roll	$15,%esi
 	addl	%ecx,%esi
-	# 115
+	# 115 
 	movl	12(%esp),%edx
 	orl	%esi,%eax
 	addl	%edx,%ecx
@@ -1419,7 +1424,7 @@ L000start:
 	subl	%esi,%edx
 	roll	$11,%ecx
 	addl	%ebp,%ecx
-	# 116
+	# 116 
 	movl	28(%esp),%eax
 	orl	%ecx,%edx
 	addl	%eax,%ebp
@@ -1430,7 +1435,7 @@ L000start:
 	subl	%ecx,%eax
 	roll	$8,%ebp
 	addl	%ebx,%ebp
-	# 117
+	# 117 
 	movl	56(%esp),%edx
 	orl	%ebp,%eax
 	addl	%edx,%ebx
@@ -1441,7 +1446,7 @@ L000start:
 	subl	%ebp,%edx
 	roll	$6,%ebx
 	addl	%edi,%ebx
-	# 118
+	# 118 
 	movl	24(%esp),%eax
 	orl	%ebx,%edx
 	addl	%eax,%edi
@@ -1452,7 +1457,7 @@ L000start:
 	subl	%ebx,%eax
 	roll	$6,%edi
 	addl	%esi,%edi
-	# 119
+	# 119 
 	movl	36(%esp),%edx
 	orl	%edi,%eax
 	addl	%edx,%esi
@@ -1463,7 +1468,7 @@ L000start:
 	subl	%edi,%edx
 	roll	$14,%esi
 	addl	%ecx,%esi
-	# 120
+	# 120 
 	movl	44(%esp),%eax
 	orl	%esi,%edx
 	addl	%eax,%ecx
@@ -1474,7 +1479,7 @@ L000start:
 	subl	%esi,%eax
 	roll	$12,%ecx
 	addl	%ebp,%ecx
-	# 121
+	# 121 
 	movl	32(%esp),%edx
 	orl	%ecx,%eax
 	addl	%edx,%ebp
@@ -1485,7 +1490,7 @@ L000start:
 	subl	%ecx,%edx
 	roll	$13,%ebp
 	addl	%ebx,%ebp
-	# 122
+	# 122 
 	movl	48(%esp),%eax
 	orl	%ebp,%edx
 	addl	%eax,%ebx
@@ -1496,7 +1501,7 @@ L000start:
 	subl	%ebp,%eax
 	roll	$5,%ebx
 	addl	%edi,%ebx
-	# 123
+	# 123 
 	movl	8(%esp),%edx
 	orl	%ebx,%eax
 	addl	%edx,%edi
@@ -1507,7 +1512,7 @@ L000start:
 	subl	%ebx,%edx
 	roll	$14,%edi
 	addl	%esi,%edi
-	# 124
+	# 124 
 	movl	40(%esp),%eax
 	orl	%edi,%edx
 	addl	%eax,%esi
@@ -1518,7 +1523,7 @@ L000start:
 	subl	%edi,%eax
 	roll	$13,%esi
 	addl	%ecx,%esi
-	# 125
+	# 125 
 	movl	(%esp),%edx
 	orl	%esi,%eax
 	addl	%edx,%ecx
@@ -1529,7 +1534,7 @@ L000start:
 	subl	%esi,%edx
 	roll	$13,%ecx
 	addl	%ebp,%ecx
-	# 126
+	# 126 
 	movl	16(%esp),%eax
 	orl	%ecx,%edx
 	addl	%eax,%ebp
@@ -1540,7 +1545,7 @@ L000start:
 	subl	%ecx,%eax
 	roll	$7,%ebp
 	addl	%ebx,%ebp
-	# 127
+	# 127 
 	movl	52(%esp),%edx
 	orl	%ebp,%eax
 	addl	%edx,%ebx
@@ -1551,7 +1556,7 @@ L000start:
 	movl	$-1,%eax
 	roll	$5,%ebx
 	addl	%edi,%ebx
-	# 128
+	# 128 
 	addl	%edx,%edi
 	movl	%ebp,%edx
 	subl	%ebx,%eax
@@ -1564,7 +1569,7 @@ L000start:
 	movl	$-1,%edx
 	roll	$15,%edi
 	addl	%esi,%edi
-	# 129
+	# 129 
 	addl	%eax,%esi
 	movl	%ebx,%eax
 	subl	%edi,%edx
@@ -1577,7 +1582,7 @@ L000start:
 	movl	$-1,%eax
 	roll	$5,%esi
 	addl	%ecx,%esi
-	# 130
+	# 130 
 	addl	%edx,%ecx
 	movl	%edi,%edx
 	subl	%esi,%eax
@@ -1590,7 +1595,7 @@ L000start:
 	movl	$-1,%edx
 	roll	$8,%ecx
 	addl	%ebp,%ecx
-	# 131
+	# 131 
 	addl	%eax,%ebp
 	movl	%esi,%eax
 	subl	%ecx,%edx
@@ -1603,7 +1608,7 @@ L000start:
 	movl	$-1,%eax
 	roll	$11,%ebp
 	addl	%ebx,%ebp
-	# 132
+	# 132 
 	addl	%edx,%ebx
 	movl	%ecx,%edx
 	subl	%ebp,%eax
@@ -1616,7 +1621,7 @@ L000start:
 	movl	$-1,%edx
 	roll	$14,%ebx
 	addl	%edi,%ebx
-	# 133
+	# 133 
 	addl	%eax,%edi
 	movl	%ebp,%eax
 	subl	%ebx,%edx
@@ -1629,7 +1634,7 @@ L000start:
 	movl	$-1,%eax
 	roll	$14,%edi
 	addl	%esi,%edi
-	# 134
+	# 134 
 	addl	%edx,%esi
 	movl	%ebx,%edx
 	subl	%edi,%eax
@@ -1642,7 +1647,7 @@ L000start:
 	movl	$-1,%edx
 	roll	$6,%esi
 	addl	%ecx,%esi
-	# 135
+	# 135 
 	addl	%eax,%ecx
 	movl	%edi,%eax
 	subl	%esi,%edx
@@ -1655,7 +1660,7 @@ L000start:
 	movl	$-1,%eax
 	roll	$14,%ecx
 	addl	%ebp,%ecx
-	# 136
+	# 136 
 	addl	%edx,%ebp
 	movl	%esi,%edx
 	subl	%ecx,%eax
@@ -1668,7 +1673,7 @@ L000start:
 	movl	$-1,%edx
 	roll	$6,%ebp
 	addl	%ebx,%ebp
-	# 137
+	# 137 
 	addl	%eax,%ebx
 	movl	%ecx,%eax
 	subl	%ebp,%edx
@@ -1681,7 +1686,7 @@ L000start:
 	movl	$-1,%eax
 	roll	$9,%ebx
 	addl	%edi,%ebx
-	# 138
+	# 138 
 	addl	%edx,%edi
 	movl	%ebp,%edx
 	subl	%ebx,%eax
@@ -1694,7 +1699,7 @@ L000start:
 	movl	$-1,%edx
 	roll	$12,%edi
 	addl	%esi,%edi
-	# 139
+	# 139 
 	addl	%eax,%esi
 	movl	%ebx,%eax
 	subl	%edi,%edx
@@ -1707,7 +1712,7 @@ L000start:
 	movl	$-1,%eax
 	roll	$9,%esi
 	addl	%ecx,%esi
-	# 140
+	# 140 
 	addl	%edx,%ecx
 	movl	%edi,%edx
 	subl	%esi,%eax
@@ -1720,7 +1725,7 @@ L000start:
 	movl	$-1,%edx
 	roll	$12,%ecx
 	addl	%ebp,%ecx
-	# 141
+	# 141 
 	addl	%eax,%ebp
 	movl	%esi,%eax
 	subl	%ecx,%edx
@@ -1733,7 +1738,7 @@ L000start:
 	movl	$-1,%eax
 	roll	$5,%ebp
 	addl	%ebx,%ebp
-	# 142
+	# 142 
 	addl	%edx,%ebx
 	movl	%ecx,%edx
 	subl	%ebp,%eax
@@ -1746,7 +1751,7 @@ L000start:
 	movl	$-1,%edx
 	roll	$15,%ebx
 	addl	%edi,%ebx
-	# 143
+	# 143 
 	addl	%eax,%edi
 	movl	%ebp,%eax
 	subl	%ebx,%edx
@@ -1759,7 +1764,7 @@ L000start:
 	xorl	%ebp,%eax
 	roll	$8,%edi
 	addl	%esi,%edi
-	# 144
+	# 144 
 	movl	48(%esp),%edx
 	xorl	%edi,%eax
 	addl	%edx,%esi
@@ -1768,7 +1773,7 @@ L000start:
 	movl	%edi,%eax
 	roll	$8,%esi
 	addl	%ecx,%esi
-	# 145
+	# 145 
 	xorl	%ebx,%eax
 	movl	60(%esp),%edx
 	xorl	%esi,%eax
@@ -1779,7 +1784,7 @@ L000start:
 	xorl	%edi,%eax
 	roll	$5,%ecx
 	addl	%ebp,%ecx
-	# 146
+	# 146 
 	movl	40(%esp),%edx
 	xorl	%ecx,%eax
 	addl	%edx,%ebp
@@ -1788,7 +1793,7 @@ L000start:
 	movl	%ecx,%eax
 	roll	$12,%ebp
 	addl	%ebx,%ebp
-	# 147
+	# 147 
 	xorl	%esi,%eax
 	movl	16(%esp),%edx
 	xorl	%ebp,%eax
@@ -1799,7 +1804,7 @@ L000start:
 	xorl	%ecx,%eax
 	roll	$9,%ebx
 	addl	%edi,%ebx
-	# 148
+	# 148 
 	movl	4(%esp),%edx
 	xorl	%ebx,%eax
 	addl	%edx,%edi
@@ -1808,7 +1813,7 @@ L000start:
 	movl	%ebx,%eax
 	roll	$12,%edi
 	addl	%esi,%edi
-	# 149
+	# 149 
 	xorl	%ebp,%eax
 	movl	20(%esp),%edx
 	xorl	%edi,%eax
@@ -1819,7 +1824,7 @@ L000start:
 	xorl	%ebx,%eax
 	roll	$5,%esi
 	addl	%ecx,%esi
-	# 150
+	# 150 
 	movl	32(%esp),%edx
 	xorl	%esi,%eax
 	addl	%edx,%ecx
@@ -1828,7 +1833,7 @@ L000start:
 	movl	%esi,%eax
 	roll	$14,%ecx
 	addl	%ebp,%ecx
-	# 151
+	# 151 
 	xorl	%edi,%eax
 	movl	28(%esp),%edx
 	xorl	%ecx,%eax
@@ -1839,7 +1844,7 @@ L000start:
 	xorl	%esi,%eax
 	roll	$6,%ebp
 	addl	%ebx,%ebp
-	# 152
+	# 152 
 	movl	24(%esp),%edx
 	xorl	%ebp,%eax
 	addl	%edx,%ebx
@@ -1848,7 +1853,7 @@ L000start:
 	movl	%ebp,%eax
 	roll	$8,%ebx
 	addl	%edi,%ebx
-	# 153
+	# 153 
 	xorl	%ecx,%eax
 	movl	8(%esp),%edx
 	xorl	%ebx,%eax
@@ -1859,7 +1864,7 @@ L000start:
 	xorl	%ebp,%eax
 	roll	$13,%edi
 	addl	%esi,%edi
-	# 154
+	# 154 
 	movl	52(%esp),%edx
 	xorl	%edi,%eax
 	addl	%edx,%esi
@@ -1868,7 +1873,7 @@ L000start:
 	movl	%edi,%eax
 	roll	$6,%esi
 	addl	%ecx,%esi
-	# 155
+	# 155 
 	xorl	%ebx,%eax
 	movl	56(%esp),%edx
 	xorl	%esi,%eax
@@ -1879,7 +1884,7 @@ L000start:
 	xorl	%edi,%eax
 	roll	$5,%ecx
 	addl	%ebp,%ecx
-	# 156
+	# 156 
 	movl	(%esp),%edx
 	xorl	%ecx,%eax
 	addl	%edx,%ebp
@@ -1888,7 +1893,7 @@ L000start:
 	movl	%ecx,%eax
 	roll	$15,%ebp
 	addl	%ebx,%ebp
-	# 157
+	# 157 
 	xorl	%esi,%eax
 	movl	12(%esp),%edx
 	xorl	%ebp,%eax
@@ -1899,7 +1904,7 @@ L000start:
 	xorl	%ecx,%eax
 	roll	$13,%ebx
 	addl	%edi,%ebx
-	# 158
+	# 158 
 	movl	36(%esp),%edx
 	xorl	%ebx,%eax
 	addl	%edx,%edi
@@ -1908,7 +1913,7 @@ L000start:
 	movl	%ebx,%eax
 	roll	$11,%edi
 	addl	%esi,%edi
-	# 159
+	# 159 
 	xorl	%ebp,%eax
 	movl	44(%esp),%edx
 	xorl	%edi,%eax

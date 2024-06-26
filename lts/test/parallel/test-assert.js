@@ -1,4 +1,3 @@
-// Flags: --expose-internals
 // Copyright Joyent, Inc. and other Node contributors.
 //
 // Permission is hereby granted, free of charge, to any person obtaining a
@@ -25,7 +24,7 @@
 const common = require('../common');
 const assert = require('assert');
 const { inspect } = require('util');
-const { internalBinding } = require('internal/test/binding');
+const vm = require('vm');
 const a = assert;
 
 // Disable colored output to prevent color codes from breaking assertion
@@ -123,16 +122,19 @@ assert.throws(() => thrower(a.AssertionError));
 assert.throws(() => thrower(TypeError));
 
 // When passing a type, only catch errors of the appropriate type.
-{
-  let threw = false;
-  try {
-    a.throws(() => thrower(TypeError), a.AssertionError);
-  } catch (e) {
-    threw = true;
-    assert.ok(e instanceof TypeError, 'type');
+assert.throws(
+  () => a.throws(() => thrower(TypeError), a.AssertionError),
+  {
+    generatedMessage: true,
+    actual: new TypeError({}),
+    expected: a.AssertionError,
+    code: 'ERR_ASSERTION',
+    name: 'AssertionError',
+    operator: 'throws',
+    message: 'The error is expected to be an instance of "AssertionError". ' +
+             'Received "TypeError"\n\nError message:\n\n[object Object]'
   }
-  assert.ok(threw, 'a.throws with an explicit error is eating extra errors');
-}
+);
 
 // doesNotThrow should pass through all errors.
 {
@@ -237,20 +239,27 @@ a.throws(() => thrower(TypeError), (err) => {
 
 // https://github.com/nodejs/node/issues/3188
 {
-  let threw = false;
-  let AnotherErrorType;
-  try {
-    const ES6Error = class extends Error {};
-    AnotherErrorType = class extends Error {};
+  let actual;
+  assert.throws(
+    () => {
+      const ES6Error = class extends Error {};
+      const AnotherErrorType = class extends Error {};
 
-    assert.throws(() => { throw new AnotherErrorType('foo'); }, ES6Error);
-  } catch (e) {
-    threw = true;
-    assert(e instanceof AnotherErrorType,
-           `expected AnotherErrorType, received ${e}`);
-  }
-
-  assert.ok(threw);
+      assert.throws(() => {
+        actual = new AnotherErrorType('foo');
+        throw actual;
+      }, ES6Error);
+    },
+    (err) => {
+      assert.strictEqual(
+        err.message,
+        'The error is expected to be an instance of "ES6Error". ' +
+          'Received "AnotherErrorType"\n\nError message:\n\nfoo'
+      );
+      assert.strictEqual(err.actual, actual);
+      return true;
+    }
+  );
 }
 
 // Check messages from assert.throws().
@@ -335,15 +344,15 @@ testShortAssertionMessage(0, '0');
 testShortAssertionMessage(Symbol(), 'Symbol()');
 testShortAssertionMessage(undefined, 'undefined');
 testShortAssertionMessage(-Infinity, '-Infinity');
-testShortAssertionMessage(function() {}, '[Function]');
 testAssertionMessage([], '[]');
 testAssertionMessage(/a/, '/a/');
 testAssertionMessage(/abc/gim, '/abc/gim');
 testAssertionMessage({}, '{}');
 testAssertionMessage([1, 2, 3], '[\n+   1,\n+   2,\n+   3\n+ ]');
 testAssertionMessage(function f() {}, '[Function: f]');
+testAssertionMessage(function() {}, '[Function (anonymous)]');
 testAssertionMessage(circular,
-                     '{\n+   x: [Circular],\n+   y: 1\n+ }');
+                     '<ref *1> {\n+   x: [Circular *1],\n+   y: 1\n+ }');
 testAssertionMessage({ a: undefined, b: null },
                      '{\n+   a: undefined,\n+   b: null\n+ }');
 testAssertionMessage({ a: NaN, b: Infinity, c: -Infinity },
@@ -467,7 +476,7 @@ assert.throws(() => {
 {
   // Bad args to AssertionError constructor should throw TypeError.
   const args = [1, true, false, '', null, Infinity, Symbol('test'), undefined];
-  args.forEach((input) => {
+  for (const input of args) {
     assert.throws(
       () => new assert.AssertionError(input),
       {
@@ -476,7 +485,7 @@ assert.throws(() => {
         message: 'The "options" argument must be of type object.' +
                  common.invalidArgTypeHelper(input)
       });
-  });
+  }
 }
 
 assert.throws(
@@ -488,6 +497,12 @@ assert.throws(
              '+ actual - expected\n\n' +
              '+ [Error: foo]\n- [Error: foobar]'
   }
+);
+
+a.equal(NaN, NaN);
+a.throws(
+  () => a.notEqual(NaN, NaN),
+  a.AssertionError
 );
 
 // Test strict assert.
@@ -575,7 +590,7 @@ assert.throws(
     '...',
     '    1,',
     '    1',
-    '  ]'
+    '  ]',
   ].join('\n');
   assert.throws(
     () => assert.deepEqual(
@@ -596,7 +611,7 @@ assert.throws(
     '    1,',
     '    1,',
     '    1',
-    '  ]'
+    '  ]',
   ].join('\n');
   assert.throws(
     () => assert.deepEqual(
@@ -617,7 +632,7 @@ assert.throws(
     '    0,',
     '+   1,',
     '    1',
-    '  ]'
+    '  ]',
   ].join('\n');
   assert.throws(
     () => assert.deepEqual(
@@ -648,7 +663,7 @@ assert.throws(
     '+   1,',
     '    2,',
     '    1',
-    '  ]'
+    '  ]',
   ].join('\n');
   assert.throws(
     () => assert.deepEqual([1, 2, 1], [2, 1]),
@@ -676,7 +691,7 @@ assert.throws(
     '\n' +
     '+ {}\n' +
     '- {\n' +
-    '-   [Symbol(nodejs.util.inspect.custom)]: [Function],\n' +
+    '-   [Symbol(nodejs.util.inspect.custom)]: [Function (anonymous)],\n' +
     "-   loop: 'forever'\n" +
     '- }'
   });
@@ -710,6 +725,61 @@ assert.throws(
   }
 );
 assert.throws(
+  () => {
+    // This test case checks if `try` left brace without a line break
+    // before the assertion causes any wrong assertion message.
+    // Therefore, don't reformat the following code.
+    // Refs: https://github.com/nodejs/node/issues/30872
+    try { assert.ok(0);   // eslint-disable-line no-useless-catch, @stylistic/js/brace-style
+    } catch (err) {
+      throw err;
+    }
+  },
+  {
+    code: 'ERR_ASSERTION',
+    constructor: assert.AssertionError,
+    generatedMessage: true,
+    message: 'The expression evaluated to a falsy value:\n\n  ' +
+             'assert.ok(0)\n'
+  }
+);
+assert.throws(
+  () => {
+    try {
+      throw new Error();
+    // This test case checks if `catch` left brace without a line break
+    // before the assertion causes any wrong assertion message.
+    // Therefore, don't reformat the following code.
+    // Refs: https://github.com/nodejs/node/issues/30872
+    } catch (err) { assert.ok(0); }     // eslint-disable-line no-unused-vars
+  },
+  {
+    code: 'ERR_ASSERTION',
+    constructor: assert.AssertionError,
+    generatedMessage: true,
+    message: 'The expression evaluated to a falsy value:\n\n  ' +
+             'assert.ok(0)\n'
+  }
+);
+assert.throws(
+  () => {
+    // This test case checks if `function` left brace without a line break
+    // before the assertion causes any wrong assertion message.
+    // Therefore, don't reformat the following code.
+    // Refs: https://github.com/nodejs/node/issues/30872
+    function test() { assert.ok(0);     // eslint-disable-line @stylistic/js/brace-style
+    }
+    test();
+  },
+  {
+    code: 'ERR_ASSERTION',
+    constructor: assert.AssertionError,
+    generatedMessage: true,
+    message: 'The expression evaluated to a falsy value:\n\n  ' +
+             'assert.ok(0)\n'
+  }
+);
+assert.throws(
   () => assert(typeof 123n === 'string'),
   {
     code: 'ERR_ASSERTION',
@@ -730,42 +800,11 @@ assert.throws(
   }
 );
 
-{
-  // Test caching.
-  const fs = internalBinding('fs');
-  const tmp = fs.close;
-  fs.close = common.mustCall(tmp, 1);
-  function throwErr() {
-    assert(
-      (Buffer.from('test') instanceof Error)
-    );
-  }
-  assert.throws(
-    () => throwErr(),
-    {
-      code: 'ERR_ASSERTION',
-      constructor: assert.AssertionError,
-      message: 'The expression evaluated to a falsy value:\n\n  ' +
-               "assert(\n    (Buffer.from('test') instanceof Error)\n  )\n"
-    }
-  );
-  assert.throws(
-    () => throwErr(),
-    {
-      code: 'ERR_ASSERTION',
-      constructor: assert.AssertionError,
-      message: 'The expression evaluated to a falsy value:\n\n  ' +
-               "assert(\n    (Buffer.from('test') instanceof Error)\n  )\n"
-    }
-  );
-  fs.close = tmp;
-}
-
 assert.throws(
   () => {
     a(
       (() => 'string')()
-      // eslint-disable-next-line operator-linebreak
+      // eslint-disable-next-line @stylistic/js/operator-linebreak
       ===
       123 instanceof
           Buffer
@@ -777,7 +816,7 @@ assert.throws(
     message: 'The expression evaluated to a falsy value:\n\n' +
              '  a(\n' +
              '    (() => \'string\')()\n' +
-             '    // eslint-disable-next-line operator-linebreak\n' +
+             '    // eslint-disable-next-line @stylistic/js/operator-linebreak\n' +
              '    ===\n' +
              '    123 instanceof\n' +
              '        Buffer\n' +
@@ -789,7 +828,7 @@ assert.throws(
   () => {
     a(
       (() => 'string')()
-      // eslint-disable-next-line operator-linebreak
+      // eslint-disable-next-line @stylistic/js/operator-linebreak
       ===
   123 instanceof
           Buffer
@@ -801,7 +840,7 @@ assert.throws(
     message: 'The expression evaluated to a falsy value:\n\n' +
              '  a(\n' +
              '    (() => \'string\')()\n' +
-             '    // eslint-disable-next-line operator-linebreak\n' +
+             '    // eslint-disable-next-line @stylistic/js/operator-linebreak\n' +
              '    ===\n' +
              '  123 instanceof\n' +
              '        Buffer\n' +
@@ -809,7 +848,7 @@ assert.throws(
   }
 );
 
-/* eslint-disable indent */
+/* eslint-disable @stylistic/js/indent */
 assert.throws(() => {
 a((
   () => 'string')() ===
@@ -827,7 +866,7 @@ Buffer
            '  )\n'
   }
 );
-/* eslint-enable indent */
+/* eslint-enable @stylistic/js/indent */
 
 assert.throws(
   () => {
@@ -855,7 +894,7 @@ assert.throws(
 );
 
 assert.throws(
-  // eslint-disable-next-line dot-notation, quotes
+  // eslint-disable-next-line dot-notation, @stylistic/js/quotes
   () => assert['ok']["apply"](null, [0]),
   {
     code: 'ERR_ASSERTION',
@@ -904,7 +943,7 @@ assert.throws(
   {
     code: 'ERR_ASSERTION',
     constructor: assert.AssertionError,
-    message: 'The expression evaluated to a falsy value:\n\n  assert(1 === 2)\n'
+    message: 'false == true'
   }
 );
 assert.throws(
@@ -926,11 +965,8 @@ assert.throws(
   }
 );
 
-[
-  1,
-  false,
-  Symbol()
-].forEach((input) => {
+const inputs = [1, false, Symbol()];
+for (const input of inputs) {
   assert.throws(
     () => assert.throws(() => {}, input),
     {
@@ -940,7 +976,7 @@ assert.throws(
                common.invalidArgTypeHelper(input)
     }
   );
-});
+}
 
 {
 
@@ -1226,10 +1262,11 @@ assert.throws(
 {
   let threw = false;
   try {
+    // eslint-disable-next-line no-restricted-syntax
     assert.deepStrictEqual(Array(100).fill(1), 'foobar');
   } catch (err) {
     threw = true;
-    assert(/actual: \[Array],\n  expected: 'foobar',/.test(inspect(err)));
+    assert.match(inspect(err), /actual: \[Array],\n {2}expected: 'foobar',/);
   }
   assert(threw);
 }
@@ -1265,7 +1302,7 @@ assert.throws(
 );
 
 assert.throws(
-  () => a.notStrictEqual(5n),
+  () => a.notStrictEqual(5n), // eslint-disable-line no-restricted-syntax
   { code: 'ERR_MISSING_ARGS' }
 );
 
@@ -1301,6 +1338,55 @@ assert.throws(
     assert(!err2.stack.includes('hidden'));
   })();
 }
+
+assert.throws(
+  () => assert.throws(() => { throw Symbol('foo'); }, RangeError),
+  {
+    message: 'The error is expected to be an instance of "RangeError". ' +
+             'Received "Symbol(foo)"'
+  }
+);
+
+assert.throws(
+  // eslint-disable-next-line no-throw-literal
+  () => assert.throws(() => { throw [1, 2]; }, RangeError),
+  {
+    message: 'The error is expected to be an instance of "RangeError". ' +
+             'Received "[Array]"'
+  }
+);
+
+{
+  const err = new TypeError('foo');
+  const validate = (() => () => ({ a: true, b: [ 1, 2, 3 ] }))();
+  assert.throws(
+    () => assert.throws(() => { throw err; }, validate),
+    {
+      message: 'The validation function is expected to ' +
+              `return "true". Received ${inspect(validate())}\n\nCaught ` +
+              `error:\n\n${err}`,
+      code: 'ERR_ASSERTION',
+      actual: err,
+      expected: validate,
+      name: 'AssertionError',
+      operator: 'throws',
+    }
+  );
+}
+
+assert.throws(
+  () => {
+    const script = new vm.Script('new RangeError("foobar");');
+    const context = vm.createContext();
+    const err = script.runInContext(context);
+    assert.throws(() => { throw err; }, RangeError);
+  },
+  {
+    message: 'The error is expected to be an instance of "RangeError". ' +
+             'Received an error with identical name but a different ' +
+             'prototype.\n\nError message:\n\nfoobar'
+  }
+);
 
 // Multiple assert.match() tests.
 {

@@ -22,8 +22,7 @@
 'use strict';
 const common = require('../common');
 const assert = require('assert');
-const PassThrough = require('_stream_passthrough');
-const Transform = require('_stream_transform');
+const { PassThrough, Transform } = require('stream');
 
 {
   // Verify writable side consumption
@@ -45,10 +44,9 @@ const Transform = require('_stream_transform');
 
   assert.strictEqual(tx.readableLength, 10);
   assert.strictEqual(transformed, 10);
-  assert.strictEqual(tx._transformState.writechunk.length, 5);
   assert.deepStrictEqual(tx.writableBuffer.map(function(c) {
     return c.chunk.length;
-  }), [6, 7, 8, 9, 10]);
+  }), [5, 6, 7, 8, 9, 10]);
 }
 
 {
@@ -407,7 +405,7 @@ const Transform = require('_stream_transform');
     { foo: 'bar' },
     100,
     'string',
-    { nested: { things: [ { foo: 'bar' }, 100, 'string' ] } }
+    { nested: { things: [ { foo: 'bar' }, 100, 'string' ] } },
   ];
 
   let ended = false;
@@ -415,11 +413,11 @@ const Transform = require('_stream_transform');
     ended = true;
   });
 
-  objects.forEach(function(obj) {
+  for (const obj of objects) {
     jp.write(JSON.stringify(obj));
     const res = jp.read();
     assert.deepStrictEqual(res, obj);
-  });
+  }
 
   jp.end();
   // Read one more time to get the 'end' event
@@ -448,7 +446,7 @@ const Transform = require('_stream_transform');
     { foo: 'bar' },
     100,
     'string',
-    { nested: { things: [ { foo: 'bar' }, 100, 'string' ] } }
+    { nested: { things: [ { foo: 'bar' }, 100, 'string' ] } },
   ];
 
   let ended = false;
@@ -456,11 +454,11 @@ const Transform = require('_stream_transform');
     ended = true;
   });
 
-  objects.forEach(function(obj) {
+  for (const obj of objects) {
     js.write(obj);
     const res = js.read();
     assert.strictEqual(res, JSON.stringify(obj));
-  });
+  }
 
   js.end();
   // Read one more time to get the 'end' event
@@ -469,4 +467,28 @@ const Transform = require('_stream_transform');
   process.nextTick(common.mustCall(function() {
     assert.strictEqual(ended, true);
   }));
+}
+
+{
+  const s = new Transform({
+    objectMode: true,
+    construct(callback) {
+      this.push('header from constructor');
+      callback();
+    },
+    transform: (row, encoding, callback) => {
+      callback(null, row);
+    },
+  });
+
+  const expected = [
+    'header from constructor',
+    'firstLine',
+    'secondLine',
+  ];
+  s.on('data', common.mustCall((data) => {
+    assert.strictEqual(data.toString(), expected.shift());
+  }, 3));
+  s.write('firstLine');
+  process.nextTick(() => s.write('secondLine'));
 }

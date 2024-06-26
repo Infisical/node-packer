@@ -7,11 +7,12 @@
 
 #include "src/compiler/graph-reducer.h"
 #include "src/compiler/js-graph.h"
+#include "src/compiler/node-origin-table.h"
 
 namespace v8 {
 namespace internal {
 
-class BailoutId;
+class BytecodeOffset;
 class OptimizedCompilationInfo;
 
 namespace compiler {
@@ -25,13 +26,19 @@ class JSInliner final : public AdvancedReducer {
  public:
   JSInliner(Editor* editor, Zone* local_zone, OptimizedCompilationInfo* info,
             JSGraph* jsgraph, JSHeapBroker* broker,
-            SourcePositionTable* source_positions)
+            SourcePositionTable* source_positions,
+            NodeOriginTable* node_origins, const wasm::WasmModule* wasm_module)
       : AdvancedReducer(editor),
         local_zone_(local_zone),
         info_(info),
         jsgraph_(jsgraph),
         broker_(broker),
-        source_positions_(source_positions) {}
+        source_positions_(source_positions),
+        node_origins_(node_origins),
+        wasm_module_(wasm_module) {
+    // In case WebAssembly is disabled.
+    USE(wasm_module_);
+  }
 
   const char* reducer_name() const override { return "JSInliner"; }
 
@@ -40,6 +47,11 @@ class JSInliner final : public AdvancedReducer {
   // Can be used by inlining heuristics or by testing code directly, without
   // using the above generic reducer interface of the inlining machinery.
   Reduction ReduceJSCall(Node* node);
+
+#if V8_ENABLE_WEBASSEMBLY
+  Reduction ReduceJSWasmCall(Node* node);
+  void InlineWasmFunction(Node* call, Node* inlinee_start, Node* inlinee_end);
+#endif  // V8_ENABLE_WEBASSEMBLY
 
  private:
   Zone* zone() const { return local_zone_; }
@@ -57,20 +69,28 @@ class JSInliner final : public AdvancedReducer {
   JSGraph* const jsgraph_;
   JSHeapBroker* const broker_;
   SourcePositionTable* const source_positions_;
+  NodeOriginTable* const node_origins_;
+  const wasm::WasmModule* wasm_module_;
 
-  base::Optional<SharedFunctionInfoRef> DetermineCallTarget(Node* node);
-  FeedbackVectorRef DetermineCallContext(Node* node, Node** context_out);
+  OptionalSharedFunctionInfoRef DetermineCallTarget(Node* node);
+  FeedbackCellRef DetermineCallContext(Node* node, Node** context_out);
 
-  Node* CreateArtificialFrameState(Node* node, Node* outer_frame_state,
-                                   int parameter_count, BailoutId bailout_id,
-                                   FrameStateType frame_state_type,
-                                   SharedFunctionInfoRef shared,
-                                   Node* context = nullptr);
+  FrameState CreateArtificialFrameState(
+      Node* node, FrameState outer_frame_state, int parameter_count,
+      BytecodeOffset bailout_id, FrameStateType frame_state_type,
+      SharedFunctionInfoRef shared, Node* context = nullptr);
 
   Reduction InlineCall(Node* call, Node* new_target, Node* context,
-                       Node* frame_state, Node* start, Node* end,
+                       Node* frame_state, StartNode start, Node* end,
                        Node* exception_target,
-                       const NodeVector& uncaught_subcalls);
+                       const NodeVector& uncaught_subcalls, int argument_count);
+
+#if V8_ENABLE_WEBASSEMBLY
+  Reduction InlineJSWasmCall(Node* call, Node* new_target, Node* context,
+                             Node* frame_state, StartNode start, Node* end,
+                             Node* exception_target,
+                             const NodeVector& uncaught_subcalls);
+#endif  // V8_ENABLE_WEBASSEMBLY
 };
 
 }  // namespace compiler

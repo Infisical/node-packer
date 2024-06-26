@@ -89,8 +89,16 @@ class Compiler
     end
 
     def cp_r(from, to, options = {})
-      warn "-> cp -r #{from.inspect} #{to.inspect}" unless @options[:quiet]
-      FileUtils.cp_r(from, to, options)
+      warn "-> cp -r #{from.inspect} #{to.inspect} with options #{options.inspect}"
+
+      # Supported FileUtils options
+      supported_options = [:preserve, :verbose, :noop, :dereference_root, :remove_destination, :force]
+
+      # Collect valid options for FileUtils.cp_r
+      cp_r_options = options.slice(*supported_options)
+
+      # Pass the options correctly to FileUtils.cp_r
+      FileUtils.cp_r(from, to, **cp_r_options)
     end
 
     def rm(path)

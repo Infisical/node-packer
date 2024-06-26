@@ -22,17 +22,46 @@
 'use strict';
 
 const {
+  ArrayPrototypeIncludes,
+  ArrayPrototypeIndexOf,
+  ArrayPrototypePop,
+  ArrayPrototypePush,
+  ArrayPrototypeShift,
+  ArrayPrototypeSome,
+  ArrayPrototypeSplice,
+  FunctionPrototypeCall,
+  NumberParseInt,
   ObjectKeys,
   ObjectSetPrototypeOf,
   ObjectValues,
+  RegExpPrototypeExec,
+  StringPrototypeIndexOf,
+  StringPrototypeSplit,
+  StringPrototypeStartsWith,
+  StringPrototypeSubstring,
   Symbol,
 } = primordials;
 
 const net = require('net');
 const EventEmitter = require('events');
-const debug = require('internal/util/debuglog').debuglog('http');
+let debug = require('internal/util/debuglog').debuglog('http', (fn) => {
+  debug = fn;
+});
+const { AsyncResource } = require('async_hooks');
 const { async_id_symbol } = require('internal/async_hooks').symbols;
+const {
+  kEmptyObject,
+  once,
+} = require('internal/util');
+const {
+  validateNumber,
+  validateOneOf,
+  validateString,
+} = require('internal/validators');
+
 const kOnKeylog = Symbol('onkeylog');
+const kRequestOptions = Symbol('requestOptions');
+const kRequestAsyncResource = Symbol('requestAsyncResource');
 // New Agent code.
 
 // The largest departure from the previous implementation is that
@@ -63,22 +92,36 @@ function Agent(options) {
   if (!(this instanceof Agent))
     return new Agent(options);
 
-  EventEmitter.call(this);
+  FunctionPrototypeCall(EventEmitter, this);
 
   this.defaultPort = 80;
   this.protocol = 'http:';
 
-  this.options = { ...options };
+  this.options = { __proto__: null, ...options };
+
+  if (this.options.noDelay === undefined)
+    this.options.noDelay = true;
 
   // Don't confuse net and make it think that we're connecting to a pipe
   this.options.path = null;
-  this.requests = {};
-  this.sockets = {};
-  this.freeSockets = {};
+  this.requests = { __proto__: null };
+  this.sockets = { __proto__: null };
+  this.freeSockets = { __proto__: null };
   this.keepAliveMsecs = this.options.keepAliveMsecs || 1000;
   this.keepAlive = this.options.keepAlive || false;
   this.maxSockets = this.options.maxSockets || Agent.defaultMaxSockets;
   this.maxFreeSockets = this.options.maxFreeSockets || 256;
+  this.scheduling = this.options.scheduling || 'lifo';
+  this.maxTotalSockets = this.options.maxTotalSockets;
+  this.totalSocketCount = 0;
+
+  validateOneOf(this.scheduling, 'scheduling', ['fifo', 'lifo']);
+
+  if (this.maxTotalSockets !== undefined) {
+    validateNumber(this.maxTotalSockets, 'maxTotalSockets', 1);
+  } else {
+    this.maxTotalSockets = Infinity;
+  }
 
   this.on('free', (socket, options) => {
     const name = this.getName(options);
@@ -89,52 +132,60 @@ function Agent(options) {
     // case of socket.destroy() below this 'error' has no handler
     // and could cause unhandled exception.
 
-    if (socket.writable &&
-        this.requests[name] && this.requests[name].length) {
-      const req = this.requests[name].shift();
-      setRequestSocket(this, req, socket);
-      if (this.requests[name].length === 0) {
-        // don't leak
+    if (!socket.writable) {
+      socket.destroy();
+      return;
+    }
+
+    const requests = this.requests[name];
+    if (requests && requests.length) {
+      const req = ArrayPrototypeShift(requests);
+      const reqAsyncRes = req[kRequestAsyncResource];
+      if (reqAsyncRes) {
+        // Run request within the original async context.
+        reqAsyncRes.runInAsyncScope(() => {
+          asyncResetHandle(socket);
+          setRequestSocket(this, req, socket);
+        });
+        req[kRequestAsyncResource] = null;
+      } else {
+        setRequestSocket(this, req, socket);
+      }
+      if (requests.length === 0) {
         delete this.requests[name];
       }
-    } else {
-      // If there are no pending requests, then put it in
-      // the freeSockets pool, but only if we're allowed to do so.
-      const req = socket._httpMessage;
-      if (req &&
-          req.shouldKeepAlive &&
-          socket.writable &&
-          this.keepAlive) {
-        let freeSockets = this.freeSockets[name];
-        const freeLen = freeSockets ? freeSockets.length : 0;
-        let count = freeLen;
-        if (this.sockets[name])
-          count += this.sockets[name].length;
-
-        if (count > this.maxSockets || freeLen >= this.maxFreeSockets) {
-          socket.destroy();
-        } else if (this.keepSocketAlive(socket)) {
-          freeSockets = freeSockets || [];
-          this.freeSockets[name] = freeSockets;
-          socket[async_id_symbol] = -1;
-          socket._httpMessage = null;
-          this.removeSocket(socket, options);
-
-          const agentTimeout = this.options.timeout || 0;
-          if (socket.timeout !== agentTimeout) {
-            socket.setTimeout(agentTimeout);
-          }
-
-          socket.once('error', freeSocketErrorListener);
-          freeSockets.push(socket);
-        } else {
-          // Implementation doesn't want to keep socket alive
-          socket.destroy();
-        }
-      } else {
-        socket.destroy();
-      }
+      return;
     }
+
+    // If there are no pending requests, then put it in
+    // the freeSockets pool, but only if we're allowed to do so.
+    const req = socket._httpMessage;
+    if (!req || !req.shouldKeepAlive || !this.keepAlive) {
+      socket.destroy();
+      return;
+    }
+
+    const freeSockets = this.freeSockets[name] || [];
+    const freeLen = freeSockets.length;
+    let count = freeLen;
+    if (this.sockets[name])
+      count += this.sockets[name].length;
+
+    if (this.totalSocketCount > this.maxTotalSockets ||
+        count > this.maxSockets ||
+        freeLen >= this.maxFreeSockets ||
+        !this.keepSocketAlive(socket)) {
+      socket.destroy();
+      return;
+    }
+
+    this.freeSockets[name] = freeSockets;
+    socket[async_id_symbol] = -1;
+    socket._httpMessage = null;
+    this.removeSocket(socket, options);
+
+    socket.once('error', freeSocketErrorListener);
+    ArrayPrototypePush(freeSockets, socket);
   });
 
   // Don't emit keylog events unless there is a listener for them.
@@ -152,8 +203,9 @@ function maybeEnableKeylog(eventName) {
       agent.emit('keylog', keylog, this);
     };
     // Existing sockets will start listening on keylog now.
-    for (const socket of ObjectValues(this.sockets)) {
-      socket.on('keylog', this[kOnKeylog]);
+    const sockets = ObjectValues(this.sockets);
+    for (let i = 0; i < sockets.length; i++) {
+      sockets[i].on('keylog', this[kOnKeylog]);
     }
   }
 }
@@ -163,7 +215,7 @@ Agent.defaultMaxSockets = Infinity;
 Agent.prototype.createConnection = net.createConnection;
 
 // Get the key for a given set of request options
-Agent.prototype.getName = function getName(options) {
+Agent.prototype.getName = function getName(options = kEmptyObject) {
   let name = options.host || 'localhost';
 
   name += ':';
@@ -190,18 +242,18 @@ Agent.prototype.addRequest = function addRequest(req, options, port/* legacy */,
   // Legacy API: addRequest(req, host, port, localAddress)
   if (typeof options === 'string') {
     options = {
+      __proto__: null,
       host: options,
       port,
-      localAddress
+      localAddress,
     };
   }
 
-  options = { ...options, ...this.options };
+  options = { __proto__: null, ...options, ...this.options };
   if (options.socketPath)
     options.path = options.socketPath;
 
-  if (!options.servername && options.servername !== '')
-    options.servername = calculateServerName(options, req);
+  normalizeServerName(options, req);
 
   const name = this.getName(options);
   if (!this.sockets[name]) {
@@ -212,9 +264,11 @@ Agent.prototype.addRequest = function addRequest(req, options, port/* legacy */,
   let socket;
   if (freeSockets) {
     while (freeSockets.length && freeSockets[0].destroyed) {
-      freeSockets.shift();
+      ArrayPrototypeShift(freeSockets);
     }
-    socket = freeSockets.shift();
+    socket = this.scheduling === 'fifo' ?
+      ArrayPrototypeShift(freeSockets) :
+      ArrayPrototypePop(freeSockets);
     if (!freeSockets.length)
       delete this.freeSockets[name];
   }
@@ -223,84 +277,96 @@ Agent.prototype.addRequest = function addRequest(req, options, port/* legacy */,
   const sockLen = freeLen + this.sockets[name].length;
 
   if (socket) {
-    // Guard against an uninitialized or user supplied Socket.
-    const handle = socket._handle;
-    if (handle && typeof handle.asyncReset === 'function') {
-      // Assign the handle a new asyncId and run any destroy()/init() hooks.
-      handle.asyncReset(new ReusedHandle(handle.getProviderType(), handle));
-      socket[async_id_symbol] = handle.getAsyncId();
-    }
-
+    asyncResetHandle(socket);
     this.reuseSocket(socket, req);
     setRequestSocket(this, req, socket);
-    this.sockets[name].push(socket);
-  } else if (sockLen < this.maxSockets) {
+    ArrayPrototypePush(this.sockets[name], socket);
+  } else if (sockLen < this.maxSockets &&
+             this.totalSocketCount < this.maxTotalSockets) {
     debug('call onSocket', sockLen, freeLen);
     // If we are under maxSockets create a new one.
-    this.createSocket(req, options, handleSocketCreation(this, req, true));
+    this.createSocket(req, options, (err, socket) => {
+      if (err)
+        req.onSocket(socket, err);
+      else
+        setRequestSocket(this, req, socket);
+    });
   } else {
     debug('wait for socket');
     // We are over limit so we'll add it to the queue.
     if (!this.requests[name]) {
       this.requests[name] = [];
     }
-    this.requests[name].push(req);
+
+    // Used to create sockets for pending requests from different origin
+    req[kRequestOptions] = options;
+    // Used to capture the original async context.
+    req[kRequestAsyncResource] = new AsyncResource('QueuedRequest');
+
+    ArrayPrototypePush(this.requests[name], req);
   }
 };
 
 Agent.prototype.createSocket = function createSocket(req, options, cb) {
-  options = { ...options, ...this.options };
+  options = { __proto__: null, ...options, ...this.options };
   if (options.socketPath)
     options.path = options.socketPath;
 
-  if (!options.servername && options.servername !== '')
-    options.servername = calculateServerName(options, req);
+  normalizeServerName(options, req);
 
   const name = this.getName(options);
   options._agentKey = name;
 
   debug('createConnection', name, options);
   options.encoding = null;
-  let called = false;
 
-  const oncreate = (err, s) => {
-    if (called)
-      return;
-    called = true;
+  const oncreate = once((err, s) => {
     if (err)
       return cb(err);
     if (!this.sockets[name]) {
       this.sockets[name] = [];
     }
-    this.sockets[name].push(s);
-    debug('sockets', name, this.sockets[name].length);
+    ArrayPrototypePush(this.sockets[name], s);
+    this.totalSocketCount++;
+    debug('sockets', name, this.sockets[name].length, this.totalSocketCount);
     installListeners(this, s, options);
     cb(null, s);
-  };
-
+  });
+  // When keepAlive is true, pass the related options to createConnection
+  if (this.keepAlive) {
+    options.keepAlive = this.keepAlive;
+    options.keepAliveInitialDelay = this.keepAliveMsecs;
+  }
   const newSocket = this.createConnection(options, oncreate);
   if (newSocket)
     oncreate(null, newSocket);
 };
 
+function normalizeServerName(options, req) {
+  if (!options.servername && options.servername !== '')
+    options.servername = calculateServerName(options, req);
+}
+
 function calculateServerName(options, req) {
   let servername = options.host;
   const hostHeader = req.getHeader('host');
   if (hostHeader) {
+    validateString(hostHeader, 'options.headers.host');
+
     // abc => abc
     // abc:123 => abc
     // [::1] => ::1
     // [::1]:123 => ::1
-    if (hostHeader.startsWith('[')) {
-      const index = hostHeader.indexOf(']');
+    if (StringPrototypeStartsWith(hostHeader, '[')) {
+      const index = StringPrototypeIndexOf(hostHeader, ']');
       if (index === -1) {
         // Leading '[', but no ']'. Need to do something...
         servername = hostHeader;
       } else {
-        servername = hostHeader.substr(1, index - 1);
+        servername = StringPrototypeSubstring(hostHeader, 1, index);
       }
     } else {
-      servername = hostHeader.split(':', 1)[0];
+      servername = StringPrototypeSplit(hostHeader, ':', 1)[0];
     }
   }
   // Don't implicitly set invalid (IP) servernames.
@@ -321,6 +387,7 @@ function installListeners(agent, s, options) {
     // This is the only place where sockets get removed from the Agent.
     // If you want to remove a socket from the pool, just close it.
     // All socket errors end in a close event anyway.
+    agent.totalSocketCount--;
     agent.removeSocket(s, options);
   }
   s.on('close', onClose);
@@ -331,10 +398,10 @@ function installListeners(agent, s, options) {
     // Destroy if in free list.
     // TODO(ronag): Always destroy, even if not in free list.
     const sockets = agent.freeSockets;
-    for (const name of ObjectKeys(sockets)) {
-      if (sockets[name].includes(s)) {
-        return s.destroy();
-      }
+    if (ArrayPrototypeSome(ObjectKeys(sockets), (name) =>
+      ArrayPrototypeIncludes(sockets[name], s),
+    )) {
+      return s.destroy();
     }
   }
   s.on('timeout', onTimeout);
@@ -344,6 +411,7 @@ function installListeners(agent, s, options) {
     // (defined by WebSockets) where we need to remove a socket from the
     // pool because it'll be locked up indefinitely
     debug('CLIENT socket onRemove');
+    agent.totalSocketCount--;
     agent.removeSocket(s, options);
     s.removeListener('close', onClose);
     s.removeListener('free', onFree);
@@ -364,13 +432,15 @@ Agent.prototype.removeSocket = function removeSocket(s, options) {
 
   // If the socket was destroyed, remove it from the free buffers too.
   if (!s.writable)
-    sets.push(this.freeSockets);
+    ArrayPrototypePush(sets, this.freeSockets);
 
-  for (const sockets of sets) {
+  for (let sk = 0; sk < sets.length; sk++) {
+    const sockets = sets[sk];
+
     if (sockets[name]) {
-      const index = sockets[name].indexOf(s);
+      const index = ArrayPrototypeIndexOf(sockets[name], s);
       if (index !== -1) {
-        sockets[name].splice(index, 1);
+        ArrayPrototypeSplice(sockets[name], index, 1);
         // Don't leak
         if (sockets[name].length === 0)
           delete sockets[name];
@@ -378,18 +448,66 @@ Agent.prototype.removeSocket = function removeSocket(s, options) {
     }
   }
 
+  let req;
   if (this.requests[name] && this.requests[name].length) {
     debug('removeSocket, have a request, make a socket');
-    const req = this.requests[name][0];
-    // If we have pending requests and a socket gets closed make a new one
-    const socketCreationHandler = handleSocketCreation(this, req, false);
-    this.createSocket(req, options, socketCreationHandler);
+    req = this.requests[name][0];
+  } else {
+    // TODO(rickyes): this logic will not be FIFO across origins.
+    // There might be older requests in a different origin, but
+    // if the origin which releases the socket has pending requests
+    // that will be prioritized.
+    const keys = ObjectKeys(this.requests);
+    for (let i = 0; i < keys.length; i++) {
+      const prop = keys[i];
+      // Check whether this specific origin is already at maxSockets
+      if (this.sockets[prop] && this.sockets[prop].length) break;
+      debug('removeSocket, have a request with different origin,' +
+        ' make a socket');
+      req = this.requests[prop][0];
+      options = req[kRequestOptions];
+      break;
+    }
   }
+
+  if (req && options) {
+    req[kRequestOptions] = undefined;
+    // If we have pending requests and a socket gets closed make a new one
+    this.createSocket(req, options, (err, socket) => {
+      if (err)
+        req.onSocket(socket, err);
+      else
+        socket.emit('free');
+    });
+  }
+
 };
 
 Agent.prototype.keepSocketAlive = function keepSocketAlive(socket) {
   socket.setKeepAlive(true, this.keepAliveMsecs);
   socket.unref();
+
+  let agentTimeout = this.options.timeout || 0;
+
+  if (socket._httpMessage?.res) {
+    const keepAliveHint = socket._httpMessage.res.headers['keep-alive'];
+
+    if (keepAliveHint) {
+      const hint = RegExpPrototypeExec(/^timeout=(\d+)/, keepAliveHint)?.[1];
+
+      if (hint) {
+        const serverHintTimeout = NumberParseInt(hint) * 1000;
+
+        if (serverHintTimeout < agentTimeout) {
+          agentTimeout = serverHintTimeout;
+        }
+      }
+    }
+  }
+
+  if (socket.timeout !== agentTimeout) {
+    socket.setTimeout(agentTimeout);
+  }
 
   return true;
 };
@@ -402,27 +520,18 @@ Agent.prototype.reuseSocket = function reuseSocket(socket, req) {
 };
 
 Agent.prototype.destroy = function destroy() {
-  for (const set of [this.freeSockets, this.sockets]) {
-    for (const key of ObjectKeys(set)) {
-      for (const setName of set[key]) {
-        setName.destroy();
+  const sets = [this.freeSockets, this.sockets];
+  for (let s = 0; s < sets.length; s++) {
+    const set = sets[s];
+    const keys = ObjectKeys(set);
+    for (let v = 0; v < keys.length; v++) {
+      const setName = set[keys[v]];
+      for (let n = 0; n < setName.length; n++) {
+        setName[n].destroy();
       }
     }
   }
 };
-
-function handleSocketCreation(agent, request, informRequest) {
-  return function handleSocketCreation_Inner(err, socket) {
-    if (err) {
-      process.nextTick(emitErrorNT, request, err);
-      return;
-    }
-    if (informRequest)
-      setRequestSocket(agent, request, socket);
-    else
-      socket.emit('free');
-  };
-}
 
 function setRequestSocket(agent, req, socket) {
   req.onSocket(socket);
@@ -433,11 +542,17 @@ function setRequestSocket(agent, req, socket) {
   socket.setTimeout(req.timeout);
 }
 
-function emitErrorNT(emitter, err) {
-  emitter.emit('error', err);
+function asyncResetHandle(socket) {
+  // Guard against an uninitialized or user supplied Socket.
+  const handle = socket._handle;
+  if (handle && typeof handle.asyncReset === 'function') {
+    // Assign the handle a new asyncId and run any destroy()/init() hooks.
+    handle.asyncReset(new ReusedHandle(handle.getProviderType(), handle));
+    socket[async_id_symbol] = handle.getAsyncId();
+  }
 }
 
 module.exports = {
   Agent,
-  globalAgent: new Agent()
+  globalAgent: new Agent({ keepAlive: true, scheduling: 'lifo', timeout: 5000 }),
 };

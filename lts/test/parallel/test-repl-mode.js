@@ -1,13 +1,16 @@
 'use strict';
-require('../common');
+const common = require('../common');
 const assert = require('assert');
 const Stream = require('stream');
 const repl = require('repl');
 
+common.skipIfDumbTerminal();
+
 const tests = [
   testSloppyMode,
   testStrictMode,
-  testAutoMode
+  testAutoMode,
+  testStrictModeTerminal,
 ];
 
 tests.forEach(function(test) {
@@ -29,12 +32,28 @@ function testStrictMode() {
   const cli = initRepl(repl.REPL_MODE_STRICT);
 
   cli.input.emit('data', 'x = 3\n');
-  assert.ok(/ReferenceError: x is not defined/.test(
-    cli.output.accumulator.join('')));
+  assert.match(cli.output.accumulator.join(''),
+               /ReferenceError: x is not defined/);
   cli.output.accumulator.length = 0;
 
   cli.input.emit('data', 'let y = 3\n');
   assert.strictEqual(cli.output.accumulator.join(''), 'undefined\n> ');
+}
+
+function testStrictModeTerminal() {
+  if (!process.features.inspector) {
+    console.warn('Test skipped: V8 inspector is disabled');
+    return;
+  }
+  // Verify that ReferenceErrors are reported in strict mode previews.
+  const cli = initRepl(repl.REPL_MODE_STRICT, {
+    terminal: true
+  });
+
+  cli.input.emit('data', 'xyz ');
+  assert.ok(
+    cli.output.accumulator.includes('\n// ReferenceError: xyz is not defined')
+  );
 }
 
 function testAutoMode() {
@@ -48,7 +67,7 @@ function testAutoMode() {
   assert.strictEqual(cli.output.accumulator.join(''), 'undefined\n> ');
 }
 
-function initRepl(mode) {
+function initRepl(mode, options) {
   const input = new Stream();
   input.write = input.pause = input.resume = () => {};
   input.readable = true;
@@ -65,6 +84,7 @@ function initRepl(mode) {
     output: output,
     useColors: false,
     terminal: false,
-    replMode: mode
+    replMode: mode,
+    ...options
   });
 }

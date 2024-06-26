@@ -6,6 +6,7 @@
 #define V8_TORQUE_SERVER_DATA_H_
 
 #include <map>
+#include <memory>
 #include <vector>
 
 #include "src/base/macros.h"
@@ -35,7 +36,7 @@ using SymbolsMap = std::map<SourceId, Symbols>;
 // This contextual class holds all the necessary data to answer incoming
 // LSP requests. It is reset for each compilation step and all information
 // is calculated eagerly during compilation.
-class LanguageServerData : public ContextualClass<LanguageServerData> {
+class LanguageServerData : public base::ContextualClass<LanguageServerData> {
  public:
   LanguageServerData() = default;
 
@@ -47,12 +48,12 @@ class LanguageServerData : public ContextualClass<LanguageServerData> {
 
   static void SetGlobalContext(GlobalContext global_context) {
     Get().global_context_ =
-        base::make_unique<GlobalContext>(std::move(global_context));
+        std::make_unique<GlobalContext>(std::move(global_context));
     Get().PrepareAllDeclarableSymbols();
   }
 
   static void SetTypeOracle(TypeOracle type_oracle) {
-    Get().type_oracle_ = base::make_unique<TypeOracle>(std::move(type_oracle));
+    Get().type_oracle_ = std::make_unique<TypeOracle>(std::move(type_oracle));
   }
 
   static const Symbols& SymbolsForSourceId(SourceId id) {

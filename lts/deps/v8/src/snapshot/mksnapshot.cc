@@ -5,19 +5,21 @@
 #include <errno.h>
 #include <signal.h>
 #include <stdio.h>
+
 #include <iomanip>
 
 #include "include/libplatform/libplatform.h"
+#include "include/v8-initialization.h"
+#include "src/base/platform/elapsed-timer.h"
 #include "src/base/platform/platform.h"
-#include "src/codegen/assembler-arch.h"
-#include "src/codegen/source-position-table.h"
+#include "src/base/platform/wrappers.h"
+#include "src/base/vector.h"
+#include "src/codegen/cpu-features.h"
+#include "src/common/globals.h"
 #include "src/flags/flags.h"
-#include "src/sanitizer/msan.h"
 #include "src/snapshot/embedded/embedded-file-writer.h"
-#include "src/snapshot/natives.h"
-#include "src/snapshot/partial-serializer.h"
 #include "src/snapshot/snapshot.h"
-#include "src/snapshot/startup-serializer.h"
+#include "src/snapshot/static-roots-gen.h"
 
 namespace {
 
@@ -36,19 +38,20 @@ class SnapshotFileWriter {
     // we end up with a corrupted snapshot file. The build step would succeed,
     // but the build target is unusable. Ideally we would write out temporary
     // files and only move them to the final destination as last step.
-    i::Vector<const i::byte> blob_vector(
+    v8::base::Vector<const i::byte> blob_vector(
         reinterpret_cast<const i::byte*>(blob.data), blob.raw_size);
     MaybeWriteSnapshotFile(blob_vector);
     MaybeWriteStartupBlob(blob_vector);
   }
 
  private:
-  void MaybeWriteStartupBlob(const i::Vector<const i::byte>& blob) const {
+  void MaybeWriteStartupBlob(
+      const v8::base::Vector<const i::byte>& blob) const {
     if (!snapshot_blob_path_) return;
 
     FILE* fp = GetFileDescriptorOrDie(snapshot_blob_path_);
     size_t written = fwrite(blob.begin(), 1, blob.length(), fp);
-    fclose(fp);
+    v8::base::Fclose(fp);
     if (written != static_cast<size_t>(blob.length())) {
       i::PrintF("Writing snapshot file failed.. Aborting.\n");
       remove(snapshot_blob_path_);
@@ -56,7 +59,8 @@ class SnapshotFileWriter {
     }
   }
 
-  void MaybeWriteSnapshotFile(const i::Vector<const i::byte>& blob) const {
+  void MaybeWriteSnapshotFile(
+      const v8::base::Vector<const i::byte>& blob) const {
     if (!snapshot_cpp_path_) return;
 
     FILE* fp = GetFileDescriptorOrDie(snapshot_cpp_path_);
@@ -65,7 +69,7 @@ class SnapshotFileWriter {
     WriteSnapshotFileData(fp, blob);
     WriteSnapshotFileSuffix(fp);
 
-    fclose(fp);
+    v8::base::Fclose(fp);
   }
 
   static void WriteSnapshotFilePrefix(FILE* fp) {
@@ -80,13 +84,19 @@ class SnapshotFileWriter {
   static void WriteSnapshotFileSuffix(FILE* fp) {
     fprintf(fp, "const v8::StartupData* Snapshot::DefaultSnapshotBlob() {\n");
     fprintf(fp, "  return &blob;\n");
-    fprintf(fp, "}\n\n");
+    fprintf(fp, "}\n");
+    fprintf(fp, "\n");
+    fprintf(
+        fp,
+        "bool Snapshot::ShouldVerifyChecksum(const v8::StartupData* data) {\n");
+    fprintf(fp, "  return true;\n");
+    fprintf(fp, "}\n");
     fprintf(fp, "}  // namespace internal\n");
     fprintf(fp, "}  // namespace v8\n");
   }
 
-  static void WriteSnapshotFileData(FILE* fp,
-                                    const i::Vector<const i::byte>& blob) {
+  static void WriteSnapshotFileData(
+      FILE* fp, const v8::base::Vector<const i::byte>& blob) {
     fprintf(fp,
             "alignas(kPointerAlignment) static const byte blob_data[] = {\n");
     WriteBinaryContentsAsCArray(fp, blob);
@@ -97,7 +107,7 @@ class SnapshotFileWriter {
   }
 
   static void WriteBinaryContentsAsCArray(
-      FILE* fp, const i::Vector<const i::byte>& blob) {
+      FILE* fp, const v8::base::Vector<const i::byte>& blob) {
     for (int i = 0; i < blob.length(); i++) {
       if ((i & 0x1F) == 0x1F) fprintf(fp, "\n");
       if (i > 0) fprintf(fp, ",");
@@ -140,7 +150,7 @@ char* GetExtraCode(char* filename, const char* description) {
     }
     i += read;
   }
-  fclose(file);
+  v8::base::Fclose(file);
   return chars;
 }
 
@@ -153,8 +163,8 @@ v8::StartupData CreateSnapshotDataBlob(v8::Isolate* isolate,
       v8::SnapshotCreator::FunctionCodeHandling::kClear, embedded_source,
       isolate);
 
-  if (i::FLAG_profile_deserialization) {
-    i::PrintF("Creating snapshot took %0.3f ms\n",
+  if (i::v8_flags.profile_deserialization) {
+    i::PrintF("[Creating snapshot took %0.3f ms]\n",
               timer.Elapsed().InMillisecondsF());
   }
 
@@ -170,7 +180,7 @@ v8::StartupData WarmUpSnapshotDataBlob(v8::StartupData cold_snapshot_blob,
   v8::StartupData result =
       i::WarmUpSnapshotDataBlobInternal(cold_snapshot_blob, warmup_source);
 
-  if (i::FLAG_profile_deserialization) {
+  if (i::v8_flags.profile_deserialization) {
     i::PrintF("Warming up snapshot took %0.3f ms\n",
               timer.Elapsed().InMillisecondsF());
   }
@@ -196,7 +206,7 @@ void MaybeSetCounterFunction(v8::Isolate* isolate) {
   // distinguish between them. In theory it should be okay to just return an
   // incremented int value each time this function is called, but we play it
   // safe and return a real distinct memory location tied to every counter name.
-  if (i::FLAG_native_code_counters) {
+  if (i::v8_flags.native_code_counters) {
     counter_map_ = new CounterMap();
     isolate->SetCounterFunction([](const char* name) -> int* {
       auto map_entry = counter_map_->find(name);
@@ -214,16 +224,21 @@ int main(int argc, char** argv) {
   v8::base::EnsureConsoleOutput();
 
   // Make mksnapshot runs predictable to create reproducible snapshots.
-  i::FLAG_predictable = true;
+  i::v8_flags.predictable = true;
 
   // Print the usage if an error occurs when parsing the command line
   // flags or if the help flag is set.
-  int result = i::FlagList::SetFlagsFromCommandLine(&argc, argv, true);
-  if (result > 0 || (argc > 3) || i::FLAG_help) {
-    ::printf("Usage: %s --startup_src=... --startup_blob=... [extras]\n",
-             argv[0]);
-    i::FlagList::PrintHelp();
-    return !i::FLAG_help;
+  using HelpOptions = i::FlagList::HelpOptions;
+  std::string usage = "Usage: " + std::string(argv[0]) +
+                      " [--startup-src=file]" + " [--startup-blob=file]" +
+                      " [--embedded-src=file]" + " [--embedded-variant=label]" +
+                      " [--static-roots-src=file]" + " [--target-arch=arch]" +
+                      " [--target-os=os] [extras]\n\n";
+  int result = i::FlagList::SetFlagsFromCommandLine(
+      &argc, argv, true, HelpOptions(HelpOptions::kExit, usage.c_str()));
+  if (result > 0 || (argc > 3)) {
+    i::PrintF(stdout, "%s", usage.c_str());
+    return result;
   }
 
   i::CpuFeatures::Probe(true);
@@ -234,14 +249,14 @@ int main(int argc, char** argv) {
 
   {
     SnapshotFileWriter snapshot_writer;
-    snapshot_writer.SetSnapshotFile(i::FLAG_startup_src);
-    snapshot_writer.SetStartupBlobFile(i::FLAG_startup_blob);
+    snapshot_writer.SetSnapshotFile(i::v8_flags.startup_src);
+    snapshot_writer.SetStartupBlobFile(i::v8_flags.startup_blob);
 
     i::EmbeddedFileWriter embedded_writer;
-    embedded_writer.SetEmbeddedFile(i::FLAG_embedded_src);
-    embedded_writer.SetEmbeddedVariant(i::FLAG_embedded_variant);
-    embedded_writer.SetTargetArch(i::FLAG_target_arch);
-    embedded_writer.SetTargetOs(i::FLAG_target_os);
+    embedded_writer.SetEmbeddedFile(i::v8_flags.embedded_src);
+    embedded_writer.SetEmbeddedVariant(i::v8_flags.embedded_variant);
+    embedded_writer.SetTargetArch(i::v8_flags.target_arch);
+    embedded_writer.SetTargetOs(i::v8_flags.target_os);
 
     std::unique_ptr<char> embed_script(
         GetExtraCode(argc >= 2 ? argv[1] : nullptr, "embedding"));
@@ -255,28 +270,30 @@ int main(int argc, char** argv) {
 
       MaybeSetCounterFunction(isolate);
 
-      if (i::FLAG_embedded_builtins) {
-        // Set code range such that relative jumps for builtins to
-        // builtin calls in the snapshot are possible.
-        i::Isolate* i_isolate = reinterpret_cast<i::Isolate*>(isolate);
-        size_t code_range_size_mb =
-            i::kMaximalCodeRangeSize == 0
-                ? i::kMaxPCRelativeCodeRangeInMB
-                : std::min(i::kMaximalCodeRangeSize / i::MB,
-                           i::kMaxPCRelativeCodeRangeInMB);
-        v8::ResourceConstraints constraints;
-        constraints.set_code_range_size_in_bytes(code_range_size_mb * i::MB);
-        i_isolate->heap()->ConfigureHeap(constraints);
-        // The isolate contains data from builtin compilation that needs
-        // to be written out if builtins are embedded.
-        i_isolate->RegisterEmbeddedFileWriter(&embedded_writer);
-      }
+      // Set code range such that relative jumps for builtins to
+      // builtin calls in the snapshot are possible.
+      i::Isolate* i_isolate = reinterpret_cast<i::Isolate*>(isolate);
+      size_t code_range_size_mb =
+          i::kMaximalCodeRangeSize == 0
+              ? i::kMaxPCRelativeCodeRangeInMB
+              : std::min(i::kMaximalCodeRangeSize / i::MB,
+                         i::kMaxPCRelativeCodeRangeInMB);
+      v8::ResourceConstraints constraints;
+      constraints.set_code_range_size_in_bytes(code_range_size_mb * i::MB);
+      i_isolate->heap()->ConfigureHeap(constraints);
+      // The isolate contains data from builtin compilation that needs
+      // to be written out if builtins are embedded.
+      i_isolate->RegisterEmbeddedFileWriter(&embedded_writer);
+
       blob = CreateSnapshotDataBlob(isolate, embed_script.get());
-      if (i::FLAG_embedded_builtins) {
-        // At this point, the Isolate has been torn down but the embedded blob
-        // is still alive (we called DisableEmbeddedBlobRefcounting above).
-        // That's fine as far as the embedded file writer is concerned.
-        WriteEmbeddedFile(&embedded_writer);
+
+      // At this point, the Isolate has been torn down but the embedded blob
+      // is still alive (we called DisableEmbeddedBlobRefcounting above).
+      // That's fine as far as the embedded file writer is concerned.
+      WriteEmbeddedFile(&embedded_writer);
+
+      if (i::v8_flags.static_roots_src) {
+        i::StaticRootsTableGen::write(i_isolate, i::v8_flags.static_roots_src);
       }
     }
 
@@ -295,6 +312,6 @@ int main(int argc, char** argv) {
   i::FreeCurrentEmbeddedBlob();
 
   v8::V8::Dispose();
-  v8::V8::ShutdownPlatform();
+  v8::V8::DisposePlatform();
   return 0;
 }

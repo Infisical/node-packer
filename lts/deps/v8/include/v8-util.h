@@ -5,10 +5,13 @@
 #ifndef V8_UTIL_H_
 #define V8_UTIL_H_
 
-#include "v8.h"  // NOLINT(build/include)
 #include <assert.h>
+
 #include <map>
 #include <vector>
+
+#include "v8-function-callback.h"  // NOLINT(build/include_directory)
+#include "v8-persistent-handle.h"  // NOLINT(build/include_directory)
 
 /**
  * Support for Persistent containers.
@@ -18,6 +21,9 @@
  * may want these container classes.
  */
 namespace v8 {
+
+template <typename K, typename V, typename Traits>
+class GlobalValueMap;
 
 typedef uintptr_t PersistentContainerValue;
 static const uintptr_t kPersistentContainerNotFound = 0;
@@ -43,7 +49,7 @@ class StdMapTraits {
 
   static bool Empty(Impl* impl) { return impl->empty(); }
   static size_t Size(Impl* impl) { return impl->size(); }
-  static void Swap(Impl& a, Impl& b) { std::swap(a, b); }  // NOLINT
+  static void Swap(Impl& a, Impl& b) { std::swap(a, b); }
   static Iterator Begin(Impl* impl) { return impl->begin(); }
   static Iterator End(Impl* impl) { return impl->end(); }
   static K Key(Iterator it) { return it->first; }
@@ -175,7 +181,11 @@ class PersistentValueMapBase {
    * Get value stored in map.
    */
   Local<V> Get(const K& key) {
-    return Local<V>::New(isolate_, FromVal(Traits::Get(&impl_, key)));
+    V* p = FromVal(Traits::Get(&impl_, key));
+#ifdef V8_ENABLE_CONSERVATIVE_STACK_SCANNING
+    if (p == nullptr) return Local<V>();
+#endif
+    return Local<V>::New(isolate_, p);
   }
 
   /**
@@ -193,14 +203,6 @@ class PersistentValueMapBase {
       ReturnValue<Value> returnValue) {
     return SetReturnValueFromVal(&returnValue, Traits::Get(&impl_, key));
   }
-
-  /**
-   * Call V8::RegisterExternallyReferencedObject with the map value for given
-   * key.
-   */
-  V8_DEPRECATED(
-      "Used TracedGlobal and EmbedderHeapTracer::RegisterEmbedderReference",
-      inline void RegisterExternallyReferencedObject(K& key));
 
   /**
    * Return value for key and remove it from the map.
@@ -238,7 +240,8 @@ class PersistentValueMapBase {
         : value_(other.value_) { }
 
     Local<V> NewLocal(Isolate* isolate) const {
-      return Local<V>::New(isolate, FromVal(value_));
+      return Local<V>::New(
+          isolate, internal::ValueHelper::SlotAsValue<V>(FromVal(value_)));
     }
     bool IsEmpty() const {
       return value_ == kPersistentContainerNotFound;
@@ -351,16 +354,6 @@ class PersistentValueMapBase {
   typename Traits::Impl impl_;
   const char* label_;
 };
-
-template <typename K, typename V, typename Traits>
-inline void
-PersistentValueMapBase<K, V, Traits>::RegisterExternallyReferencedObject(
-    K& key) {
-  assert(Contains(key));
-  V8::RegisterExternallyReferencedObject(
-      reinterpret_cast<internal::Address*>(FromVal(Traits::Get(&impl_, key))),
-      reinterpret_cast<internal::Isolate*>(GetIsolate()));
-}
 
 template <typename K, typename V, typename Traits>
 class PersistentValueMap : public PersistentValueMapBase<K, V, Traits> {
@@ -549,7 +542,6 @@ class StdGlobalValueMap : public GlobalValueMap<K, V, Traits> {
       : GlobalValueMap<K, V, Traits>(isolate) {}
 };
 
-
 class DefaultPersistentValueVectorTraits {
  public:
   typedef std::vector<PersistentContainerValue> Impl;
@@ -574,7 +566,6 @@ class DefaultPersistentValueVectorTraits {
   }
 };
 
-
 /**
  * A vector wrapper that safely stores Global values.
  * C++11 embedders don't need this class, as they can use Global
@@ -585,8 +576,8 @@ class DefaultPersistentValueVectorTraits {
  * PersistentContainerValue, with all conversion into and out of V8
  * handles being transparently handled by this class.
  */
-template<typename V, typename Traits = DefaultPersistentValueVectorTraits>
-class PersistentValueVector {
+template <typename V, typename Traits = DefaultPersistentValueVectorTraits>
+class V8_DEPRECATE_SOON("Use std::vector<Global<V>>.") PersistentValueVector {
  public:
   explicit PersistentValueVector(Isolate* isolate) : isolate_(isolate) { }
 
@@ -627,7 +618,8 @@ class PersistentValueVector {
    * Retrieve the i-th value in the vector.
    */
   Local<V> Get(size_t index) const {
-    return Local<V>::New(isolate_, FromVal(Traits::Get(&impl_, index)));
+    return Local<V>::New(isolate_, internal::ValueHelper::SlotAsValue<V>(
+                                       FromVal(Traits::Get(&impl_, index))));
   }
 
   /**

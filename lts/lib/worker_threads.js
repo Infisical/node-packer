@@ -4,21 +4,29 @@ const {
   isMainThread,
   SHARE_ENV,
   resourceLimits,
+  setEnvironmentData,
+  getEnvironmentData,
   threadId,
-  Worker
+  Worker,
 } = require('internal/worker');
 
 const {
   MessagePort,
   MessageChannel,
   moveMessagePortToContext,
-  receiveMessageOnPort
+  receiveMessageOnPort,
+  BroadcastChannel,
 } = require('internal/worker/io');
+
+const {
+  markAsUntransferable,
+} = require('internal/buffer');
 
 module.exports = {
   isMainThread,
   MessagePort,
   MessageChannel,
+  markAsUntransferable,
   moveMessagePortToContext,
   receiveMessageOnPort,
   resourceLimits,
@@ -27,4 +35,7 @@ module.exports = {
   Worker,
   parentPort: null,
   workerData: null,
+  BroadcastChannel,
+  setEnvironmentData,
+  getEnvironmentData,
 };

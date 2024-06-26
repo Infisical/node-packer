@@ -22,12 +22,12 @@
 'use strict';
 require('../common');
 const assert = require('assert');
-const path = require('path');
 const fs = require('fs');
 
 const tmpdir = require('../common/tmpdir');
 
-const FILENAME = path.join(tmpdir.path, 'watch-me');
+tmpdir.refresh();
+const FILENAME = tmpdir.resolve('watch-me');
 const TIMEOUT = 1300;
 
 let nevents = 0;

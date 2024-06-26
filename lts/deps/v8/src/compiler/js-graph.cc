@@ -5,8 +5,6 @@
 #include "src/compiler/js-graph.h"
 
 #include "src/codegen/code-factory.h"
-#include "src/compiler/node-properties.h"
-#include "src/compiler/typer.h"
 #include "src/objects/objects-inl.h"
 
 namespace v8 {
@@ -18,9 +16,9 @@ namespace compiler {
 #define DEFINE_GETTER(name, expr) \
   Node* JSGraph::name() { return GET_CACHED_FIELD(&name##_, expr); }
 
-Node* JSGraph::CEntryStubConstant(int result_size, SaveFPRegsMode save_doubles,
-                                  ArgvMode argv_mode, bool builtin_exit_frame) {
-  if (save_doubles == kDontSaveFPRegs && argv_mode == kArgvOnStack) {
+Node* JSGraph::CEntryStubConstant(int result_size, ArgvMode argv_mode,
+                                  bool builtin_exit_frame) {
+  if (argv_mode == ArgvMode::kStack) {
     DCHECK(result_size >= 1 && result_size <= 3);
     if (!builtin_exit_frame) {
       Node** ptr = nullptr;
@@ -32,40 +30,42 @@ Node* JSGraph::CEntryStubConstant(int result_size, SaveFPRegsMode save_doubles,
         DCHECK_EQ(3, result_size);
         ptr = &CEntryStub3Constant_;
       }
-      return GET_CACHED_FIELD(ptr, HeapConstant(CodeFactory::CEntry(
-                                       isolate(), result_size, save_doubles,
-                                       argv_mode, builtin_exit_frame)));
+      return GET_CACHED_FIELD(
+          ptr, HeapConstant(CodeFactory::CEntry(
+                   isolate(), result_size, argv_mode, builtin_exit_frame)));
     }
     Node** ptr = builtin_exit_frame ? &CEntryStub1WithBuiltinExitFrameConstant_
                                     : &CEntryStub1Constant_;
-    return GET_CACHED_FIELD(ptr, HeapConstant(CodeFactory::CEntry(
-                                     isolate(), result_size, save_doubles,
-                                     argv_mode, builtin_exit_frame)));
+    return GET_CACHED_FIELD(
+        ptr, HeapConstant(CodeFactory::CEntry(isolate(), result_size, argv_mode,
+                                              builtin_exit_frame)));
   }
-  return HeapConstant(CodeFactory::CEntry(isolate(), result_size, save_doubles,
-                                          argv_mode, builtin_exit_frame));
+  return HeapConstant(CodeFactory::CEntry(isolate(), result_size, argv_mode,
+                                          builtin_exit_frame));
 }
 
-Node* JSGraph::Constant(const ObjectRef& ref) {
+Node* JSGraph::Constant(const ObjectRef& ref, JSHeapBroker* broker) {
   if (ref.IsSmi()) return Constant(ref.AsSmi());
-  OddballType oddball_type =
-      ref.AsHeapObject().GetHeapObjectType().oddball_type();
   if (ref.IsHeapNumber()) {
     return Constant(ref.AsHeapNumber().value());
-  } else if (oddball_type == OddballType::kUndefined) {
-    DCHECK(ref.object().equals(isolate()->factory()->undefined_value()));
+  }
+  OddballType oddball_type =
+      ref.AsHeapObject().GetHeapObjectType(broker).oddball_type();
+  ReadOnlyRoots roots(isolate());
+  if (oddball_type == OddballType::kUndefined) {
+    DCHECK(ref.object()->IsUndefined(roots));
     return UndefinedConstant();
   } else if (oddball_type == OddballType::kNull) {
-    DCHECK(ref.object().equals(isolate()->factory()->null_value()));
+    DCHECK(ref.object()->IsNull(roots));
     return NullConstant();
   } else if (oddball_type == OddballType::kHole) {
-    DCHECK(ref.object().equals(isolate()->factory()->the_hole_value()));
+    DCHECK(ref.object()->IsTheHole(roots));
     return TheHoleConstant();
   } else if (oddball_type == OddballType::kBoolean) {
-    if (ref.object().equals(isolate()->factory()->true_value())) {
+    if (ref.object()->IsTrue(roots)) {
       return TrueConstant();
     } else {
-      DCHECK(ref.object().equals(isolate()->factory()->false_value()));
+      DCHECK(ref.object()->IsFalse(roots));
       return FalseConstant();
     }
   } else {
@@ -74,8 +74,10 @@ Node* JSGraph::Constant(const ObjectRef& ref) {
 }
 
 Node* JSGraph::Constant(double value) {
-  if (bit_cast<int64_t>(value) == bit_cast<int64_t>(0.0)) return ZeroConstant();
-  if (bit_cast<int64_t>(value) == bit_cast<int64_t>(1.0)) return OneConstant();
+  if (base::bit_cast<int64_t>(value) == base::bit_cast<int64_t>(0.0))
+    return ZeroConstant();
+  if (base::bit_cast<int64_t>(value) == base::bit_cast<int64_t>(1.0))
+    return OneConstant();
   return NumberConstant(value);
 }
 
@@ -129,6 +131,9 @@ DEFINE_GETTER(BooleanMapConstant, HeapConstant(factory()->boolean_map()))
 DEFINE_GETTER(ToNumberBuiltinConstant,
               HeapConstant(BUILTIN_CODE(isolate(), ToNumber)))
 
+DEFINE_GETTER(PlainPrimitiveToNumberBuiltinConstant,
+              HeapConstant(BUILTIN_CODE(isolate(), PlainPrimitiveToNumber)))
+
 DEFINE_GETTER(EmptyFixedArrayConstant,
               HeapConstant(factory()->empty_fixed_array()))
 
@@ -141,6 +146,9 @@ DEFINE_GETTER(PropertyArrayMapConstant,
 
 DEFINE_GETTER(FixedDoubleArrayMapConstant,
               HeapConstant(factory()->fixed_double_array_map()))
+
+DEFINE_GETTER(WeakFixedArrayMapConstant,
+              HeapConstant(factory()->weak_fixed_array_map()))
 
 DEFINE_GETTER(HeapNumberMapConstant, HeapConstant(factory()->heap_number_map()))
 
@@ -160,6 +168,8 @@ DEFINE_GETTER(NullConstant, HeapConstant(factory()->null_value()))
 
 DEFINE_GETTER(ZeroConstant, NumberConstant(0.0))
 
+DEFINE_GETTER(MinusZeroConstant, NumberConstant(-0.0))
+
 DEFINE_GETTER(OneConstant, NumberConstant(1.0))
 
 DEFINE_GETTER(MinusOneConstant, NumberConstant(-1.0))
@@ -171,11 +181,14 @@ DEFINE_GETTER(EmptyStateValues,
               graph()->NewNode(common()->StateValues(0,
                                                      SparseInputMask::Dense())))
 
-DEFINE_GETTER(SingleDeadTypedStateValues,
-              graph()->NewNode(common()->TypedStateValues(
-                  new (graph()->zone()->New(sizeof(ZoneVector<MachineType>)))
-                      ZoneVector<MachineType>(0, graph()->zone()),
-                  SparseInputMask(SparseInputMask::kEndMarker << 1))))
+DEFINE_GETTER(
+    SingleDeadTypedStateValues,
+    graph()->NewNode(common()->TypedStateValues(
+        graph()->zone()->New<ZoneVector<MachineType>>(0, graph()->zone()),
+        SparseInputMask(SparseInputMask::kEndMarker << 1))))
+
+DEFINE_GETTER(ExternalObjectMapConstant,
+              HeapConstant(factory()->external_map()))
 
 #undef DEFINE_GETTER
 #undef GET_CACHED_FIELD

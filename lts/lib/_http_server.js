@@ -22,10 +22,17 @@
 'use strict';
 
 const {
+  ArrayIsArray,
   Error,
+  FunctionPrototypeCall,
+  MathMin,
   ObjectKeys,
   ObjectSetPrototypeOf,
+  RegExpPrototypeExec,
+  ReflectApply,
   Symbol,
+  SymbolAsyncDispose,
+  SymbolFor,
 } = primordials;
 
 const net = require('net');
@@ -34,8 +41,6 @@ const assert = require('internal/assert');
 const {
   parsers,
   freeParser,
-  debug,
-  CRLF,
   continueExpression,
   chunkExpression,
   kIncomingMessage,
@@ -44,105 +49,141 @@ const {
   _checkInvalidHeaderChar: checkInvalidHeaderChar,
   prepareError,
 } = require('_http_common');
-const { OutgoingMessage } = require('_http_outgoing');
+const { ConnectionsList } = internalBinding('http_parser');
+const {
+  kUniqueHeaders,
+  parseUniqueHeadersOption,
+  OutgoingMessage,
+} = require('_http_outgoing');
 const {
   kOutHeaders,
   kNeedDrain,
-  nowDate,
-  emitStatistics
+  isTraceHTTPEnabled,
+  traceBegin,
+  traceEnd,
+  getNextTraceEventId,
 } = require('internal/http');
 const {
   defaultTriggerAsyncIdScope,
-  getOrSetAsyncId
+  getOrSetAsyncId,
 } = require('internal/async_hooks');
 const { IncomingMessage } = require('_http_incoming');
 const {
+  ConnResetException,
+  codes,
+} = require('internal/errors');
+const {
+  ERR_HTTP_REQUEST_TIMEOUT,
   ERR_HTTP_HEADERS_SENT,
   ERR_HTTP_INVALID_STATUS_CODE,
-  ERR_INVALID_ARG_TYPE,
-  ERR_INVALID_CHAR
-} = require('internal/errors').codes;
-const Buffer = require('buffer').Buffer;
+  ERR_HTTP_SOCKET_ENCODING,
+  ERR_HTTP_SOCKET_ASSIGNED,
+  ERR_INVALID_ARG_VALUE,
+  ERR_INVALID_CHAR,
+} = codes;
 const {
-  DTRACE_HTTP_SERVER_REQUEST,
-  DTRACE_HTTP_SERVER_RESPONSE
-} = require('internal/dtrace');
-const { getOptionValue } = require('internal/options');
-const { observerCounts, constants } = internalBinding('performance');
-const { NODE_PERFORMANCE_ENTRY_TYPE_HTTP } = constants;
+  kEmptyObject,
+  promisify,
+} = require('internal/util');
+const {
+  validateInteger,
+  validateBoolean,
+  validateLinkHeaderValue,
+  validateObject,
+} = require('internal/validators');
+const Buffer = require('buffer').Buffer;
+const { setInterval, clearInterval } = require('timers');
+let debug = require('internal/util/debuglog').debuglog('http', (fn) => {
+  debug = fn;
+});
+
+const dc = require('diagnostics_channel');
+const onRequestStartChannel = dc.channel('http.server.request.start');
+const onResponseFinishChannel = dc.channel('http.server.response.finish');
 
 const kServerResponse = Symbol('ServerResponse');
 const kServerResponseStatistics = Symbol('ServerResponseStatistics');
-const kDefaultHttpServerTimeout =
-  getOptionValue('--http-server-default-timeout');
+
+const {
+  hasObserver,
+  startPerf,
+  stopPerf,
+} = require('internal/perf/observe');
 
 const STATUS_CODES = {
-  100: 'Continue',
-  101: 'Switching Protocols',
-  102: 'Processing',                 // RFC 2518, obsoleted by RFC 4918
-  103: 'Early Hints',
-  200: 'OK',
-  201: 'Created',
-  202: 'Accepted',
-  203: 'Non-Authoritative Information',
-  204: 'No Content',
-  205: 'Reset Content',
-  206: 'Partial Content',
-  207: 'Multi-Status',               // RFC 4918
-  208: 'Already Reported',
-  226: 'IM Used',
-  300: 'Multiple Choices',           // RFC 7231
-  301: 'Moved Permanently',
-  302: 'Found',
-  303: 'See Other',
-  304: 'Not Modified',
-  305: 'Use Proxy',
-  307: 'Temporary Redirect',
-  308: 'Permanent Redirect',         // RFC 7238
-  400: 'Bad Request',
-  401: 'Unauthorized',
-  402: 'Payment Required',
-  403: 'Forbidden',
-  404: 'Not Found',
-  405: 'Method Not Allowed',
-  406: 'Not Acceptable',
-  407: 'Proxy Authentication Required',
-  408: 'Request Timeout',
-  409: 'Conflict',
-  410: 'Gone',
-  411: 'Length Required',
-  412: 'Precondition Failed',
-  413: 'Payload Too Large',
-  414: 'URI Too Long',
-  415: 'Unsupported Media Type',
-  416: 'Range Not Satisfiable',
-  417: 'Expectation Failed',
-  418: 'I\'m a Teapot',              // RFC 7168
-  421: 'Misdirected Request',
-  422: 'Unprocessable Entity',       // RFC 4918
-  423: 'Locked',                     // RFC 4918
-  424: 'Failed Dependency',          // RFC 4918
-  425: 'Unordered Collection',       // RFC 4918
-  426: 'Upgrade Required',           // RFC 2817
-  428: 'Precondition Required',      // RFC 6585
-  429: 'Too Many Requests',          // RFC 6585
-  431: 'Request Header Fields Too Large', // RFC 6585
-  451: 'Unavailable For Legal Reasons',
-  500: 'Internal Server Error',
-  501: 'Not Implemented',
-  502: 'Bad Gateway',
-  503: 'Service Unavailable',
-  504: 'Gateway Timeout',
-  505: 'HTTP Version Not Supported',
-  506: 'Variant Also Negotiates',    // RFC 2295
-  507: 'Insufficient Storage',       // RFC 4918
-  508: 'Loop Detected',
+  100: 'Continue',                   // RFC 7231 6.2.1
+  101: 'Switching Protocols',        // RFC 7231 6.2.2
+  102: 'Processing',                 // RFC 2518 10.1 (obsoleted by RFC 4918)
+  103: 'Early Hints',                // RFC 8297 2
+  200: 'OK',                         // RFC 7231 6.3.1
+  201: 'Created',                    // RFC 7231 6.3.2
+  202: 'Accepted',                   // RFC 7231 6.3.3
+  203: 'Non-Authoritative Information', // RFC 7231 6.3.4
+  204: 'No Content',                 // RFC 7231 6.3.5
+  205: 'Reset Content',              // RFC 7231 6.3.6
+  206: 'Partial Content',            // RFC 7233 4.1
+  207: 'Multi-Status',               // RFC 4918 11.1
+  208: 'Already Reported',           // RFC 5842 7.1
+  226: 'IM Used',                    // RFC 3229 10.4.1
+  300: 'Multiple Choices',           // RFC 7231 6.4.1
+  301: 'Moved Permanently',          // RFC 7231 6.4.2
+  302: 'Found',                      // RFC 7231 6.4.3
+  303: 'See Other',                  // RFC 7231 6.4.4
+  304: 'Not Modified',               // RFC 7232 4.1
+  305: 'Use Proxy',                  // RFC 7231 6.4.5
+  307: 'Temporary Redirect',         // RFC 7231 6.4.7
+  308: 'Permanent Redirect',         // RFC 7238 3
+  400: 'Bad Request',                // RFC 7231 6.5.1
+  401: 'Unauthorized',               // RFC 7235 3.1
+  402: 'Payment Required',           // RFC 7231 6.5.2
+  403: 'Forbidden',                  // RFC 7231 6.5.3
+  404: 'Not Found',                  // RFC 7231 6.5.4
+  405: 'Method Not Allowed',         // RFC 7231 6.5.5
+  406: 'Not Acceptable',             // RFC 7231 6.5.6
+  407: 'Proxy Authentication Required', // RFC 7235 3.2
+  408: 'Request Timeout',            // RFC 7231 6.5.7
+  409: 'Conflict',                   // RFC 7231 6.5.8
+  410: 'Gone',                       // RFC 7231 6.5.9
+  411: 'Length Required',            // RFC 7231 6.5.10
+  412: 'Precondition Failed',        // RFC 7232 4.2
+  413: 'Payload Too Large',          // RFC 7231 6.5.11
+  414: 'URI Too Long',               // RFC 7231 6.5.12
+  415: 'Unsupported Media Type',     // RFC 7231 6.5.13
+  416: 'Range Not Satisfiable',      // RFC 7233 4.4
+  417: 'Expectation Failed',         // RFC 7231 6.5.14
+  418: 'I\'m a Teapot',              // RFC 7168 2.3.3
+  421: 'Misdirected Request',        // RFC 7540 9.1.2
+  422: 'Unprocessable Entity',       // RFC 4918 11.2
+  423: 'Locked',                     // RFC 4918 11.3
+  424: 'Failed Dependency',          // RFC 4918 11.4
+  425: 'Too Early',                  // RFC 8470 5.2
+  426: 'Upgrade Required',           // RFC 2817 and RFC 7231 6.5.15
+  428: 'Precondition Required',      // RFC 6585 3
+  429: 'Too Many Requests',          // RFC 6585 4
+  431: 'Request Header Fields Too Large', // RFC 6585 5
+  451: 'Unavailable For Legal Reasons', // RFC 7725 3
+  500: 'Internal Server Error',      // RFC 7231 6.6.1
+  501: 'Not Implemented',            // RFC 7231 6.6.2
+  502: 'Bad Gateway',                // RFC 7231 6.6.3
+  503: 'Service Unavailable',        // RFC 7231 6.6.4
+  504: 'Gateway Timeout',            // RFC 7231 6.6.5
+  505: 'HTTP Version Not Supported', // RFC 7231 6.6.6
+  506: 'Variant Also Negotiates',    // RFC 2295 8.1
+  507: 'Insufficient Storage',       // RFC 4918 11.5
+  508: 'Loop Detected',              // RFC 5842 7.2
   509: 'Bandwidth Limit Exceeded',
-  510: 'Not Extended',               // RFC 2774
-  511: 'Network Authentication Required' // RFC 6585
+  510: 'Not Extended',               // RFC 2774 7
+  511: 'Network Authentication Required', // RFC 6585 6
 };
 
 const kOnExecute = HTTPParser.kOnExecute | 0;
+const kOnTimeout = HTTPParser.kOnTimeout | 0;
+const kLenientAll = HTTPParser.kLenientAll | 0;
+const kLenientNone = HTTPParser.kLenientNone | 0;
+const kConnections = Symbol('http.server.connections');
+const kConnectionsCheckingInterval = Symbol('http.server.connectionsCheckingInterval');
+
+const HTTP_SERVER_TRACE_EVENT_NAME = 'http.server.request';
 
 class HTTPServerAsyncResource {
   constructor(type, socket) {
@@ -151,36 +192,63 @@ class HTTPServerAsyncResource {
   }
 }
 
-function ServerResponse(req) {
-  OutgoingMessage.call(this);
+function ServerResponse(req, options) {
+  OutgoingMessage.call(this, options);
 
   if (req.method === 'HEAD') this._hasBody = false;
 
+  this.req = req;
   this.sendDate = true;
   this._sent100 = false;
   this._expect_continue = false;
 
   if (req.httpVersionMajor < 1 || req.httpVersionMinor < 1) {
-    this.useChunkedEncodingByDefault = chunkExpression.test(req.headers.te);
+    this.useChunkedEncodingByDefault = RegExpPrototypeExec(chunkExpression,
+                                                           req.headers.te) !== null;
     this.shouldKeepAlive = false;
   }
 
-  const httpObserverCount = observerCounts[NODE_PERFORMANCE_ENTRY_TYPE_HTTP];
-  if (httpObserverCount > 0) {
-    this[kServerResponseStatistics] = {
-      startTime: process.hrtime()
-    };
+  if (hasObserver('http')) {
+    startPerf(this, kServerResponseStatistics, {
+      type: 'http',
+      name: 'HttpRequest',
+      detail: {
+        req: {
+          method: req.method,
+          url: req.url,
+          headers: req.headers,
+        },
+      },
+    });
+  }
+  if (isTraceHTTPEnabled()) {
+    this._traceEventId = getNextTraceEventId();
+    traceBegin(HTTP_SERVER_TRACE_EVENT_NAME, this._traceEventId);
   }
 }
 ObjectSetPrototypeOf(ServerResponse.prototype, OutgoingMessage.prototype);
 ObjectSetPrototypeOf(ServerResponse, OutgoingMessage);
 
 ServerResponse.prototype._finish = function _finish() {
-  DTRACE_HTTP_SERVER_RESPONSE(this.connection);
-  if (this[kServerResponseStatistics] !== undefined) {
-    emitStatistics(this[kServerResponseStatistics]);
+  if (this[kServerResponseStatistics] && hasObserver('http')) {
+    stopPerf(this, kServerResponseStatistics, {
+      detail: {
+        res: {
+          statusCode: this.statusCode,
+          statusMessage: this.statusMessage,
+          headers: typeof this.getHeaders === 'function' ? this.getHeaders() : {},
+        },
+      },
+    });
   }
   OutgoingMessage.prototype._finish.call(this);
+  if (isTraceHTTPEnabled() && typeof this._traceEventId === 'number') {
+    const data = {
+      url: this.req?.url,
+      statusCode: this.statusCode,
+    };
+    traceEnd(HTTP_SERVER_TRACE_EVENT_NAME, this._traceEventId, data);
+  }
 };
 
 
@@ -195,8 +263,8 @@ function onServerResponseClose() {
   // array. That is, in the example below, b still gets called even though
   // it's been removed by a:
   //
-  //   var EventEmitter = require('events');
-  //   var obj = new EventEmitter();
+  //   const EventEmitter = require('events');
+  //   const obj = new EventEmitter();
   //   obj.on('event', a);
   //   obj.on('event', b);
   //   function a() { obj.removeListener('event', b) }
@@ -206,15 +274,18 @@ function onServerResponseClose() {
   // Ergo, we need to deal with stale 'close' events and handle the case
   // where the ServerResponse object has already been deconstructed.
   // Fortunately, that requires only a single if check. :-)
-  if (this._httpMessage) this._httpMessage.emit('close');
+  if (this._httpMessage) {
+    emitCloseNT(this._httpMessage);
+  }
 }
 
 ServerResponse.prototype.assignSocket = function assignSocket(socket) {
-  assert(!socket._httpMessage);
+  if (socket._httpMessage) {
+    throw new ERR_HTTP_SOCKET_ASSIGNED();
+  }
   socket._httpMessage = this;
   socket.on('close', onServerResponseClose);
   this.socket = socket;
-  this.connection = socket;
   this.emit('socket', socket);
   this._flush();
 };
@@ -223,16 +294,44 @@ ServerResponse.prototype.detachSocket = function detachSocket(socket) {
   assert(socket._httpMessage === this);
   socket.removeListener('close', onServerResponseClose);
   socket._httpMessage = null;
-  this.socket = this.connection = null;
+  this.socket = null;
 };
 
 ServerResponse.prototype.writeContinue = function writeContinue(cb) {
-  this._writeRaw(`HTTP/1.1 100 Continue${CRLF}${CRLF}`, 'ascii', cb);
+  this._writeRaw('HTTP/1.1 100 Continue\r\n\r\n', 'ascii', cb);
   this._sent100 = true;
 };
 
 ServerResponse.prototype.writeProcessing = function writeProcessing(cb) {
-  this._writeRaw(`HTTP/1.1 102 Processing${CRLF}${CRLF}`, 'ascii', cb);
+  this._writeRaw('HTTP/1.1 102 Processing\r\n\r\n', 'ascii', cb);
+};
+
+ServerResponse.prototype.writeEarlyHints = function writeEarlyHints(hints, cb) {
+  let head = 'HTTP/1.1 103 Early Hints\r\n';
+
+  validateObject(hints, 'hints');
+
+  if (hints.link === null || hints.link === undefined) {
+    return;
+  }
+
+  const link = validateLinkHeaderValue(hints.link);
+
+  if (link.length === 0) {
+    return;
+  }
+
+  head += 'Link: ' + link + '\r\n';
+
+  for (const key of ObjectKeys(hints)) {
+    if (key !== 'link') {
+      head += key + ': ' + hints[key] + '\r\n';
+    }
+  }
+
+  head += '\r\n';
+
+  this._writeRaw(head, 'ascii', cb);
 };
 
 ServerResponse.prototype._implicitHeader = function _implicitHeader() {
@@ -241,6 +340,11 @@ ServerResponse.prototype._implicitHeader = function _implicitHeader() {
 
 ServerResponse.prototype.writeHead = writeHead;
 function writeHead(statusCode, reason, obj) {
+
+  if (this._header) {
+    throw new ERR_HTTP_HEADERS_SENT('write');
+  }
+
   const originalStatusCode = statusCode;
 
   statusCode |= 0;
@@ -256,7 +360,7 @@ function writeHead(statusCode, reason, obj) {
     // writeHead(statusCode[, headers])
     if (!this.statusMessage)
       this.statusMessage = STATUS_CODES[statusCode] || 'unknown';
-    obj = reason;
+    obj ??= reason;
   }
   this.statusCode = statusCode;
 
@@ -264,7 +368,16 @@ function writeHead(statusCode, reason, obj) {
   if (this[kOutHeaders]) {
     // Slow-case: when progressive API and header fields are passed.
     let k;
-    if (obj) {
+    if (ArrayIsArray(obj)) {
+      if (obj.length % 2 !== 0) {
+        throw new ERR_INVALID_ARG_VALUE('headers', obj);
+      }
+
+      for (let n = 0; n < obj.length; n += 2) {
+        k = obj[n + 0];
+        if (k) this.setHeader(k, obj[n + 1]);
+      }
+    } else if (obj) {
       const keys = ObjectKeys(obj);
       // Retain for(;;) loop for performance reasons
       // Refs: https://github.com/nodejs/node/pull/30958
@@ -272,9 +385,6 @@ function writeHead(statusCode, reason, obj) {
         k = keys[i];
         if (k) this.setHeader(k, obj[k]);
       }
-    }
-    if (k === undefined && this._header) {
-      throw new ERR_HTTP_HEADERS_SENT('render');
     }
     // Only progressive api is used
     headers = this[kOutHeaders];
@@ -286,7 +396,7 @@ function writeHead(statusCode, reason, obj) {
   if (checkInvalidHeaderChar(this.statusMessage))
     throw new ERR_INVALID_CHAR('statusMessage');
 
-  const statusLine = `HTTP/1.1 ${statusCode} ${this.statusMessage}${CRLF}`;
+  const statusLine = `HTTP/1.1 ${statusCode} ${this.statusMessage}\r\n`;
 
   if (statusCode === 204 || statusCode === 304 ||
       (statusCode >= 100 && statusCode <= 199)) {
@@ -317,30 +427,118 @@ function writeHead(statusCode, reason, obj) {
 // Docs-only deprecated: DEP0063
 ServerResponse.prototype.writeHeader = ServerResponse.prototype.writeHead;
 
+function storeHTTPOptions(options) {
+  this[kIncomingMessage] = options.IncomingMessage || IncomingMessage;
+  this[kServerResponse] = options.ServerResponse || ServerResponse;
+
+  const maxHeaderSize = options.maxHeaderSize;
+  if (maxHeaderSize !== undefined)
+    validateInteger(maxHeaderSize, 'maxHeaderSize', 0);
+  this.maxHeaderSize = maxHeaderSize;
+
+  const insecureHTTPParser = options.insecureHTTPParser;
+  if (insecureHTTPParser !== undefined)
+    validateBoolean(insecureHTTPParser, 'options.insecureHTTPParser');
+  this.insecureHTTPParser = insecureHTTPParser;
+
+  const requestTimeout = options.requestTimeout;
+  if (requestTimeout !== undefined) {
+    validateInteger(requestTimeout, 'requestTimeout', 0);
+    this.requestTimeout = requestTimeout;
+  } else {
+    this.requestTimeout = 300_000; // 5 minutes
+  }
+
+  const headersTimeout = options.headersTimeout;
+  if (headersTimeout !== undefined) {
+    validateInteger(headersTimeout, 'headersTimeout', 0);
+    this.headersTimeout = headersTimeout;
+  } else {
+    this.headersTimeout = MathMin(60_000, this.requestTimeout); // Minimum between 60 seconds or requestTimeout
+  }
+
+  if (this.requestTimeout > 0 && this.headersTimeout > 0 && this.headersTimeout > this.requestTimeout) {
+    throw new codes.ERR_OUT_OF_RANGE('headersTimeout', '<= requestTimeout', headersTimeout);
+  }
+
+  const keepAliveTimeout = options.keepAliveTimeout;
+  if (keepAliveTimeout !== undefined) {
+    validateInteger(keepAliveTimeout, 'keepAliveTimeout', 0);
+    this.keepAliveTimeout = keepAliveTimeout;
+  } else {
+    this.keepAliveTimeout = 5_000; // 5 seconds;
+  }
+
+  const connectionsCheckingInterval = options.connectionsCheckingInterval;
+  if (connectionsCheckingInterval !== undefined) {
+    validateInteger(connectionsCheckingInterval, 'connectionsCheckingInterval', 0);
+    this.connectionsCheckingInterval = connectionsCheckingInterval;
+  } else {
+    this.connectionsCheckingInterval = 30_000; // 30 seconds
+  }
+
+  const requireHostHeader = options.requireHostHeader;
+  if (requireHostHeader !== undefined) {
+    validateBoolean(requireHostHeader, 'options.requireHostHeader');
+    this.requireHostHeader = requireHostHeader;
+  } else {
+    this.requireHostHeader = true;
+  }
+
+  const joinDuplicateHeaders = options.joinDuplicateHeaders;
+  if (joinDuplicateHeaders !== undefined) {
+    validateBoolean(joinDuplicateHeaders, 'options.joinDuplicateHeaders');
+  }
+  this.joinDuplicateHeaders = joinDuplicateHeaders;
+
+  const rejectNonStandardBodyWrites = options.rejectNonStandardBodyWrites;
+  if (rejectNonStandardBodyWrites !== undefined) {
+    validateBoolean(rejectNonStandardBodyWrites, 'options.rejectNonStandardBodyWrites');
+    this.rejectNonStandardBodyWrites = rejectNonStandardBodyWrites;
+  } else {
+    this.rejectNonStandardBodyWrites = false;
+  }
+}
+
+function setupConnectionsTracking() {
+  // Start connection handling
+  if (!this[kConnections]) {
+    this[kConnections] = new ConnectionsList();
+  }
+
+  if (this[kConnectionsCheckingInterval]) {
+    clearInterval(this[kConnectionsCheckingInterval]);
+  }
+  // This checker is started without checking whether any headersTimeout or requestTimeout is non zero
+  // otherwise it would not be started if such timeouts are modified after createServer.
+  this[kConnectionsCheckingInterval] =
+    setInterval(checkConnections.bind(this), this.connectionsCheckingInterval).unref();
+}
+
+function httpServerPreClose(server) {
+  server.closeIdleConnections();
+  clearInterval(server[kConnectionsCheckingInterval]);
+}
+
 function Server(options, requestListener) {
   if (!(this instanceof Server)) return new Server(options, requestListener);
 
   if (typeof options === 'function') {
     requestListener = options;
-    options = {};
-  } else if (options == null || typeof options === 'object') {
-    options = { ...options };
+    options = kEmptyObject;
+  } else if (options == null) {
+    options = kEmptyObject;
   } else {
-    throw new ERR_INVALID_ARG_TYPE('options', 'object', options);
+    validateObject(options, 'options');
   }
 
-  this[kIncomingMessage] = options.IncomingMessage || IncomingMessage;
-  this[kServerResponse] = options.ServerResponse || ServerResponse;
-
-  const insecureHTTPParser = options.insecureHTTPParser;
-  if (insecureHTTPParser !== undefined &&
-      typeof insecureHTTPParser !== 'boolean') {
-    throw new ERR_INVALID_ARG_TYPE(
-      'options.insecureHTTPParser', 'boolean', insecureHTTPParser);
-  }
-  this.insecureHTTPParser = insecureHTTPParser;
-
-  net.Server.call(this, { allowHalfOpen: true });
+  storeHTTPOptions.call(this, options);
+  net.Server.call(
+    this,
+    { allowHalfOpen: true, noDelay: options.noDelay ?? true,
+      keepAlive: options.keepAlive,
+      keepAliveInitialDelay: options.keepAliveInitialDelay,
+      highWaterMark: options.highWaterMark });
 
   if (requestListener) {
     this.on('request', requestListener);
@@ -348,19 +546,58 @@ function Server(options, requestListener) {
 
   // Similar option to this. Too lazy to write my own docs.
   // http://www.squid-cache.org/Doc/config/half_closed_clients/
-  // http://wiki.squid-cache.org/SquidFaq/InnerWorkings#What_is_a_half-closed_filedescriptor.3F
+  // https://wiki.squid-cache.org/SquidFaq/InnerWorkings#What_is_a_half-closed_filedescriptor.3F
   this.httpAllowHalfOpen = false;
 
   this.on('connection', connectionListener);
+  this.on('listening', setupConnectionsTracking);
 
-  this.timeout = kDefaultHttpServerTimeout;
-  this.keepAliveTimeout = 5000;
+  this.timeout = 0;
   this.maxHeadersCount = null;
-  this.headersTimeout = 60 * 1000; // 60 seconds
+  this.maxRequestsPerSocket = 0;
+
+  this[kUniqueHeaders] = parseUniqueHeadersOption(options.uniqueHeaders);
 }
 ObjectSetPrototypeOf(Server.prototype, net.Server.prototype);
 ObjectSetPrototypeOf(Server, net.Server);
 
+Server.prototype.close = function() {
+  httpServerPreClose(this);
+  ReflectApply(net.Server.prototype.close, this, arguments);
+  return this;
+};
+
+Server.prototype[SymbolAsyncDispose] = async function() {
+  return FunctionPrototypeCall(promisify(this.close), this);
+};
+
+Server.prototype.closeAllConnections = function() {
+  if (!this[kConnections]) {
+    return;
+  }
+
+  const connections = this[kConnections].all();
+
+  for (let i = 0, l = connections.length; i < l; i++) {
+    connections[i].socket.destroy();
+  }
+};
+
+Server.prototype.closeIdleConnections = function() {
+  if (!this[kConnections]) {
+    return;
+  }
+
+  const connections = this[kConnections].idle();
+
+  for (let i = 0, l = connections.length; i < l; i++) {
+    if (connections[i].socket._httpMessage && !connections[i].socket._httpMessage.finished) {
+      continue;
+    }
+
+    connections[i].socket.destroy();
+  }
+};
 
 Server.prototype.setTimeout = function setTimeout(msecs, callback) {
   this.timeout = msecs;
@@ -369,16 +606,15 @@ Server.prototype.setTimeout = function setTimeout(msecs, callback) {
   return this;
 };
 
-Server.prototype[EE.captureRejectionSymbol] = function(
-  err, event, ...args) {
-
+Server.prototype[EE.captureRejectionSymbol] = function(err, event, ...args) {
   switch (event) {
-    case 'request':
-      const [ , res] = args;
+    case 'request': {
+      const { 1: res } = args;
       if (!res.headersSent && !res.writableEnded) {
         // Don't leak headers.
-        for (const name of res.getHeaderNames()) {
-          res.removeHeader(name);
+        const names = res.getHeaderNames();
+        for (let i = 0; i < names.length; i++) {
+          res.removeHeader(names[i]);
         }
         res.statusCode = 500;
         res.end(STATUS_CODES[500]);
@@ -386,15 +622,32 @@ Server.prototype[EE.captureRejectionSymbol] = function(
         res.destroy();
       }
       break;
+    }
     default:
-      net.Server.prototype[Symbol.for('nodejs.rejection')]
-        .call(this, err, event, ...args);
+      net.Server.prototype[SymbolFor('nodejs.rejection')]
+        .apply(this, arguments);
   }
 };
 
+function checkConnections() {
+  if (this.headersTimeout === 0 && this.requestTimeout === 0) {
+    return;
+  }
+
+  const expired = this[kConnections].expired(this.headersTimeout, this.requestTimeout);
+
+  for (let i = 0; i < expired.length; i++) {
+    const socket = expired[i].socket;
+
+    if (socket) {
+      onRequestTimeout(socket);
+    }
+  }
+}
+
 function connectionListener(socket) {
   defaultTriggerAsyncIdScope(
-    getOrSetAsyncId(socket), connectionListenerInternal, this, socket
+    getOrSetAsyncId(socket), connectionListenerInternal, this, socket,
   );
 }
 
@@ -414,19 +667,20 @@ function connectionListenerInternal(server, socket) {
 
   const parser = parsers.alloc();
 
+  const lenient = server.insecureHTTPParser === undefined ?
+    isLenient() : server.insecureHTTPParser;
+
   // TODO(addaleax): This doesn't play well with the
   // `async_hooks.currentResource()` proposal, see
   // https://github.com/nodejs/node/pull/21313
   parser.initialize(
     HTTPParser.REQUEST,
     new HTTPServerAsyncResource('HTTPINCOMINGMESSAGE', socket),
-    server.insecureHTTPParser === undefined ?
-      isLenient() : server.insecureHTTPParser,
+    server.maxHeaderSize || 0,
+    lenient ? kLenientAll : kLenientNone,
+    server[kConnections],
   );
   parser.socket = socket;
-
-  // We are starting to wait for our headers.
-  parser.parsingHeadersStart = nowDate();
   socket.parser = parser;
 
   // Propagate headers limit from server instance to parser
@@ -446,18 +700,24 @@ function connectionListenerInternal(server, socket) {
     // need to pause TCP socket/HTTP parser, and wait until the data will be
     // sent to the client.
     outgoingData: 0,
-    keepAliveTimeoutSet: false
+    requestsCount: 0,
+    keepAliveTimeoutSet: false,
   };
-  state.onData = socketOnData.bind(undefined, server, socket, parser, state);
-  state.onEnd = socketOnEnd.bind(undefined, server, socket, parser, state);
-  state.onClose = socketOnClose.bind(undefined, socket, state);
-  state.onDrain = socketOnDrain.bind(undefined, socket, state);
+  state.onData = socketOnData.bind(undefined,
+                                   server, socket, parser, state);
+  state.onEnd = socketOnEnd.bind(undefined,
+                                 server, socket, parser, state);
+  state.onClose = socketOnClose.bind(undefined,
+                                     socket, state);
+  state.onDrain = socketOnDrain.bind(undefined,
+                                     socket, state);
   socket.on('data', state.onData);
   socket.on('error', socketOnError);
   socket.on('end', state.onEnd);
   socket.on('close', state.onClose);
   socket.on('drain', state.onDrain);
-  parser.onIncoming = parserOnIncoming.bind(undefined, server, socket, state);
+  parser.onIncoming = parserOnIncoming.bind(undefined,
+                                            server, socket, state);
 
   // We are consuming socket, so it won't get any actual data
   socket.on('resume', onSocketResume);
@@ -467,6 +727,7 @@ function connectionListenerInternal(server, socket) {
   socket.on = generateSocketListenerWrapper('on');
   socket.addListener = generateSocketListenerWrapper('addListener');
   socket.prependListener = generateSocketListenerWrapper('prependListener');
+  socket.setEncoding = socketSetEncoding;
 
   // We only consume the socket if it has never been consumed before.
   if (socket._handle && socket._handle.isStreamBase &&
@@ -476,9 +737,18 @@ function connectionListenerInternal(server, socket) {
     parser.consume(socket._handle);
   }
   parser[kOnExecute] =
-    onParserExecute.bind(undefined, server, socket, parser, state);
+    onParserExecute.bind(undefined,
+                         server, socket, parser, state);
+
+  parser[kOnTimeout] =
+    onParserTimeout.bind(undefined,
+                         server, socket);
 
   socket._paused = false;
+}
+
+function socketSetEncoding() {
+  throw new ERR_HTTP_SOCKET_ENCODING();
 }
 
 function updateOutgoingData(socket, state, delta) {
@@ -517,20 +787,14 @@ function socketOnTimeout() {
 
 function socketOnClose(socket, state) {
   debug('server socket close');
-  // Mark this parser as reusable
-  if (socket.parser) {
-    freeParser(socket.parser, null, socket);
-  }
-
+  freeParser(socket.parser, null, socket);
   abortIncoming(state.incoming);
 }
 
 function abortIncoming(incoming) {
   while (incoming.length) {
     const req = incoming.shift();
-    req.aborted = true;
-    req.emit('aborted');
-    req.emit('close');
+    req.destroy(new ConnResetException('aborted'));
   }
   // Abort socket._httpMessage ?
 }
@@ -540,18 +804,15 @@ function socketOnEnd(server, socket, parser, state) {
 
   if (ret instanceof Error) {
     debug('parse error');
+    // socketOnError has additional logic and will call socket.destroy(err).
     socketOnError.call(socket, ret);
-    return;
-  }
-
-  if (!server.httpAllowHalfOpen) {
-    abortIncoming(state.incoming);
-    if (socket.writable) socket.end();
+  } else if (!server.httpAllowHalfOpen) {
+    socket.end();
   } else if (state.outgoing.length) {
     state.outgoing[state.outgoing.length - 1]._last = true;
   } else if (socket._httpMessage) {
     socket._httpMessage._last = true;
-  } else if (socket.writable) {
+  } else {
     socket.end();
   }
 }
@@ -564,47 +825,78 @@ function socketOnData(server, socket, parser, state, d) {
   onParserExecuteCommon(server, socket, parser, state, ret, d);
 }
 
+function onRequestTimeout(socket) {
+  // socketOnError has additional logic and will call socket.destroy(err).
+  socketOnError.call(socket, new ERR_HTTP_REQUEST_TIMEOUT());
+}
+
 function onParserExecute(server, socket, parser, state, ret) {
+  // When underlying `net.Socket` instance is consumed - no
+  // `data` events are emitted, and thus `socket.setTimeout` fires the
+  // callback even if the data is constantly flowing into the socket.
+  // See, https://github.com/nodejs/node/commit/ec2822adaad76b126b5cccdeaa1addf2376c9aa6
   socket._unrefTimer();
-  const start = parser.parsingHeadersStart;
   debug('SERVER socketOnParserExecute %d', ret);
-
-  // If we have not parsed the headers, destroy the socket
-  // after server.headersTimeout to protect from DoS attacks.
-  // start === 0 means that we have parsed headers, while
-  // server.headersTimeout === 0 means user disabled this check.
-  if (
-    start !== 0 && server.headersTimeout &&
-    nowDate() - start > server.headersTimeout
-  ) {
-    const serverTimeout = server.emit('timeout', socket);
-
-    if (!serverTimeout)
-      socket.destroy();
-    return;
-  }
-
   onParserExecuteCommon(server, socket, parser, state, ret, undefined);
+}
+
+function onParserTimeout(server, socket) {
+  const serverTimeout = server.emit('timeout', socket);
+
+  if (!serverTimeout)
+    socket.destroy();
 }
 
 const noop = () => {};
 const badRequestResponse = Buffer.from(
-  `HTTP/1.1 400 ${STATUS_CODES[400]}${CRLF}` +
-  `Connection: close${CRLF}${CRLF}`, 'ascii'
+  `HTTP/1.1 400 ${STATUS_CODES[400]}\r\n` +
+  'Connection: close\r\n\r\n', 'ascii',
+);
+const requestTimeoutResponse = Buffer.from(
+  `HTTP/1.1 408 ${STATUS_CODES[408]}\r\n` +
+  'Connection: close\r\n\r\n', 'ascii',
 );
 const requestHeaderFieldsTooLargeResponse = Buffer.from(
-  `HTTP/1.1 431 ${STATUS_CODES[431]}${CRLF}` +
-  `Connection: close${CRLF}${CRLF}`, 'ascii'
+  `HTTP/1.1 431 ${STATUS_CODES[431]}\r\n` +
+  'Connection: close\r\n\r\n', 'ascii',
 );
+
+const requestChunkExtensionsTooLargeResponse = Buffer.from(
+  `HTTP/1.1 413 ${STATUS_CODES[413]}\r\n` +
+  'Connection: close\r\n\r\n', 'ascii',
+);
+
 function socketOnError(e) {
   // Ignore further errors
   this.removeListener('error', socketOnError);
-  this.on('error', noop);
+
+  if (this.listenerCount('error', noop) === 0) {
+    this.on('error', noop);
+  }
 
   if (!this.server.emit('clientError', e, this)) {
-    if (this.writable) {
-      const response = e.code === 'HPE_HEADER_OVERFLOW' ?
-        requestHeaderFieldsTooLargeResponse : badRequestResponse;
+    // Caution must be taken to avoid corrupting the remote peer.
+    // Reply an error segment if there is no in-flight `ServerResponse`,
+    // or no data of the in-flight one has been written yet to this socket.
+    if (this.writable &&
+        (!this._httpMessage || !this._httpMessage._headerSent)) {
+      let response;
+
+      switch (e.code) {
+        case 'HPE_HEADER_OVERFLOW':
+          response = requestHeaderFieldsTooLargeResponse;
+          break;
+        case 'HPE_CHUNK_EXTENSIONS_OVERFLOW':
+          response = requestChunkExtensionsTooLargeResponse;
+          break;
+        case 'ERR_HTTP_REQUEST_TIMEOUT':
+          response = requestTimeoutResponse;
+          break;
+        default:
+          response = badRequestResponse;
+          break;
+      }
+
       this.write(response);
     }
     this.destroy(e);
@@ -616,7 +908,6 @@ function onParserExecuteCommon(server, socket, parser, state, ret, d) {
 
   if (ret instanceof Error) {
     prepareError(ret, parser, d);
-    ret.rawPacket = d || parser.getCurrentBuffer();
     debug('parse error', ret);
     socketOnError.call(socket, ret);
   } else if (parser.incoming && parser.incoming.upgrade) {
@@ -632,6 +923,7 @@ function onParserExecuteCommon(server, socket, parser, state, ret, d) {
     socket.removeListener('close', state.onClose);
     socket.removeListener('drain', state.onDrain);
     socket.removeListener('error', socketOnError);
+    socket.removeListener('timeout', socketOnTimeout);
     unconsume(parser, socket);
     parser.finish();
     freeParser(parser, req, socket);
@@ -643,11 +935,15 @@ function onParserExecuteCommon(server, socket, parser, state, ret, d) {
       const bodyHead = d.slice(ret, d.length);
 
       socket.readableFlowing = null;
+
       server.emit(eventName, req, socket, bodyHead);
     } else {
       // Got CONNECT method, but have no handler.
       socket.destroy();
     }
+  } else if (parser.incoming && parser.incoming.method === 'PRI') {
+    debug('SERVER got PRI request');
+    socket.destroy();
   }
 
   if (socket._paused && socket.parser) {
@@ -664,16 +960,22 @@ function clearIncoming(req) {
   if (parser && parser.incoming === req) {
     if (req.readableEnded) {
       parser.incoming = null;
-      req.emit('close');
     } else {
       req.on('end', clearIncoming);
     }
-  } else {
-    req.emit('close');
   }
 }
 
 function resOnFinish(req, res, socket, state, server) {
+  if (onResponseFinishChannel.hasSubscribers) {
+    onResponseFinishChannel.publish({
+      request: req,
+      response: res,
+      socket,
+      server,
+    });
+  }
+
   // Usually the first incoming element should be our request.  it may
   // be that in the case abortIncoming() was called that the incoming
   // array will be empty.
@@ -712,7 +1014,11 @@ function resOnFinish(req, res, socket, state, server) {
 }
 
 function emitCloseNT(self) {
-  self.emit('close');
+  if (!self._closed) {
+    self.destroyed = true;
+    self._closed = true;
+    self.emit('close');
+  }
 }
 
 // The following callback is issued after the headers have been read on a
@@ -720,13 +1026,6 @@ function emitCloseNT(self) {
 // to the user.
 function parserOnIncoming(server, socket, state, req, keepAlive) {
   resetSocketTimeout(server, socket, state);
-
-  if (server.keepAliveTimeout > 0) {
-    req.on('end', resetHeadersTimeoutOnReqEnd);
-  }
-
-  // Set to zero to communicate that we have finished parsing.
-  socket.parser.parsingHeadersStart = 0;
 
   if (req.upgrade) {
     req.upgrade = req.method === 'CONNECT' ||
@@ -751,11 +1050,27 @@ function parserOnIncoming(server, socket, state, req, keepAlive) {
     }
   }
 
-  const res = new server[kServerResponse](req);
-  res._onPendingData = updateOutgoingData.bind(undefined, socket, state);
+  const res = new server[kServerResponse](req,
+                                          {
+                                            highWaterMark: socket.writableHighWaterMark,
+                                            rejectNonStandardBodyWrites: server.rejectNonStandardBodyWrites,
+                                          });
+  res._keepAliveTimeout = server.keepAliveTimeout;
+  res._maxRequestsPerSocket = server.maxRequestsPerSocket;
+  res._onPendingData = updateOutgoingData.bind(undefined,
+                                               socket, state);
 
   res.shouldKeepAlive = keepAlive;
-  DTRACE_HTTP_SERVER_REQUEST(req, socket);
+  res[kUniqueHeaders] = server[kUniqueHeaders];
+
+  if (onRequestStartChannel.hasSubscribers) {
+    onRequestStartChannel.publish({
+      request: req,
+      response: res,
+      socket,
+      server,
+    });
+  }
 
   if (socket._httpMessage) {
     // There are already pending outgoing res, append.
@@ -767,28 +1082,64 @@ function parserOnIncoming(server, socket, state, req, keepAlive) {
   // When we're finished writing the response, check if this is the last
   // response, if so destroy the socket.
   res.on('finish',
-         resOnFinish.bind(undefined, req, res, socket, state, server));
+         resOnFinish.bind(undefined,
+                          req, res, socket, state, server));
 
-  if (req.headers.expect !== undefined &&
-      (req.httpVersionMajor === 1 && req.httpVersionMinor === 1)) {
-    if (continueExpression.test(req.headers.expect)) {
-      res._expect_continue = true;
+  let handled = false;
 
-      if (server.listenerCount('checkContinue') > 0) {
-        server.emit('checkContinue', req, res);
-      } else {
-        res.writeContinue();
-        server.emit('request', req, res);
-      }
-    } else if (server.listenerCount('checkExpectation') > 0) {
-      server.emit('checkExpectation', req, res);
-    } else {
-      res.writeHead(417);
+
+  if (req.httpVersionMajor === 1 && req.httpVersionMinor === 1) {
+
+    // From RFC 7230 5.4 https://datatracker.ietf.org/doc/html/rfc7230#section-5.4
+    // A server MUST respond with a 400 (Bad Request) status code to any
+    // HTTP/1.1 request message that lacks a Host header field
+    if (server.requireHostHeader && req.headers.host === undefined) {
+      res.writeHead(400, ['Connection', 'close']);
       res.end();
+      return 0;
     }
-  } else {
+
+    const isRequestsLimitSet = (
+      typeof server.maxRequestsPerSocket === 'number' &&
+      server.maxRequestsPerSocket > 0
+    );
+
+    if (isRequestsLimitSet) {
+      state.requestsCount++;
+      res.maxRequestsOnConnectionReached = (
+        server.maxRequestsPerSocket <= state.requestsCount);
+    }
+
+    if (isRequestsLimitSet &&
+      (server.maxRequestsPerSocket < state.requestsCount)) {
+      handled = true;
+      server.emit('dropRequest', req, socket);
+      res.writeHead(503);
+      res.end();
+    } else if (req.headers.expect !== undefined) {
+      handled = true;
+
+      if (RegExpPrototypeExec(continueExpression, req.headers.expect) !== null) {
+        res._expect_continue = true;
+        if (server.listenerCount('checkContinue') > 0) {
+          server.emit('checkContinue', req, res);
+        } else {
+          res.writeContinue();
+          server.emit('request', req, res);
+        }
+      } else if (server.listenerCount('checkExpectation') > 0) {
+        server.emit('checkExpectation', req, res);
+      } else {
+        res.writeHead(417);
+        res.end();
+      }
+    }
+  }
+
+  if (!handled) {
     server.emit('request', req, res);
   }
+
   return 0;  // No special treatment.
 }
 
@@ -837,7 +1188,8 @@ function unconsume(parser, socket) {
 
 function generateSocketListenerWrapper(originalFnName) {
   return function socketListenerWrap(ev, fn) {
-    const res = net.Socket.prototype[originalFnName].call(this, ev, fn);
+    const res = net.Socket.prototype[originalFnName].call(this,
+                                                          ev, fn);
     if (!this.parser) {
       this.on = net.Socket.prototype.on;
       this.addListener = net.Socket.prototype.addListener;
@@ -852,21 +1204,14 @@ function generateSocketListenerWrapper(originalFnName) {
   };
 }
 
-function resetHeadersTimeoutOnReqEnd() {
-  debug('resetHeadersTimeoutOnReqEnd');
-
-  const parser = this.socket.parser;
-  // Parser can be null if the socket was destroyed
-  // in that case, there is nothing to do.
-  if (parser) {
-    parser.parsingHeadersStart = nowDate();
-  }
-}
-
 module.exports = {
   STATUS_CODES,
   Server,
   ServerResponse,
+  setupConnectionsTracking,
+  storeHTTPOptions,
   _connectionListener: connectionListener,
-  kServerResponse
+  kServerResponse,
+  httpServerPreClose,
+  kConnectionsCheckingInterval,
 };

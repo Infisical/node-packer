@@ -8,7 +8,7 @@ const { Session } = require('inspector');
 const path = require('path');
 const { pathToFileURL } = require('url');
 const { isMainThread, parentPort, Worker, workerData } =
-    require('worker_threads');
+  require('worker_threads');
 
 if (!workerData) {
   common.skipIfWorker();
@@ -76,6 +76,12 @@ function doConsoleLog(arrayBuffer) {
 // and do not interrupt the main code. Interrupting the code flow
 // can lead to unexpected behaviors.
 async function ensureListenerDoesNotInterrupt(session) {
+  // Make sure that the following code is not affected by the fact that it may
+  // run inside an inspector message callback, during which other inspector
+  // message callbacks (such as the one triggered by doConsoleLog()) would
+  // not be processed.
+  await new Promise(setImmediate);
+
   const currentTime = Date.now();
   let consoleLogHappened = false;
   session.once('Runtime.consoleAPICalled',
@@ -94,6 +100,17 @@ async function ensureListenerDoesNotInterrupt(session) {
 }
 
 async function main() {
+  assert.throws(
+    () => {
+      const session = new Session();
+      session.connectToMainThread();
+    },
+    {
+      code: 'ERR_INSPECTOR_NOT_WORKER',
+      name: 'Error',
+      message: 'Current thread is not a worker'
+    }
+  );
   const sharedBuffer = new SharedArrayBuffer(1);
   const arrayBuffer = new Uint8Array(sharedBuffer);
   arrayBuffer[0] = 1;
@@ -105,7 +122,7 @@ async function main() {
     'Runtime.enable',
     'Debugger.setBreakpointByUrl',
     'Debugger.evaluateOnCallFrame',
-    'Debugger.resume'
+    'Debugger.resume',
   ]);
 }
 
@@ -115,6 +132,16 @@ async function childMain() {
   await (await startWorker(true)).onMessagesSent;
   const session = new Session();
   session.connectToMainThread();
+  assert.throws(
+    () => {
+      session.connectToMainThread();
+    },
+    {
+      code: 'ERR_INSPECTOR_ALREADY_CONNECTED',
+      name: 'Error',
+      message: 'The inspector session is already connected'
+    }
+  );
   await post(session, 'Debugger.enable');
   await post(session, 'Runtime.enable');
   await post(session, 'Debugger.setBreakpointByUrl', {
@@ -131,9 +158,9 @@ async function childMain() {
   await new Promise((resolve) => setTimeout(resolve, 50));
 
   const { result: { value } } =
-      await post(session,
-                 'Debugger.evaluateOnCallFrame',
-                 { callFrameId, expression: 'a * 100' });
+    await post(session,
+               'Debugger.evaluateOnCallFrame',
+               { callFrameId, expression: 'a * 100' });
   assert.strictEqual(value, 100);
   await post(session, 'Debugger.resume');
   await ensureListenerDoesNotInterrupt(session);

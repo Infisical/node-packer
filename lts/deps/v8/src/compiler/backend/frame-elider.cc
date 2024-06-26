@@ -4,7 +4,7 @@
 
 #include "src/compiler/backend/frame-elider.h"
 
-#include "src/base/adapters.h"
+#include "src/base/iterator.h"
 
 namespace v8 {
 namespace internal {
@@ -26,6 +26,18 @@ void FrameElider::MarkBlocks() {
       if (instr->IsCall() || instr->IsDeoptimizeCall() ||
           instr->arch_opcode() == ArchOpcode::kArchStackPointerGreaterThan ||
           instr->arch_opcode() == ArchOpcode::kArchFramePointer) {
+        block->mark_needs_frame();
+        break;
+      }
+      if (instr->arch_opcode() == ArchOpcode::kArchStackSlot &&
+          instr->InputAt(0)->IsImmediate() &&
+          code_->GetImmediate(ImmediateOperand::cast(instr->InputAt(0)))
+                  .ToInt32() > 0) {
+        // We shouldn't allow accesses to the stack below the current stack
+        // pointer (indicated by positive slot indices).
+        // This is in particular because signal handlers (which could, of
+        // course, be triggered at any point in time) will overwrite this
+        // memory.
         block->mark_needs_frame();
         break;
       }

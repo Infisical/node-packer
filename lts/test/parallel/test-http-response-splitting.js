@@ -35,10 +35,11 @@ function test(res, code, key, value) {
 
 const server = http.createServer((req, res) => {
   switch (count++) {
-    case 0:
+    case 0: {
       const loc = url.parse(req.url, true).query.lang;
       test(res, 302, 'Location', `/foo?lang=${loc}`);
       break;
+    }
     case 1:
       test(res, 200, 'foo', x);
       break;
@@ -52,7 +53,7 @@ const server = http.createServer((req, res) => {
   res.end('ok');
 });
 server.listen(0, () => {
-  const end = 'HTTP/1.1\r\n\r\n';
+  const end = 'HTTP/1.1\r\nHost: example.com\r\n\r\n';
   const client = net.connect({ port: server.address().port }, () => {
     client.write(`GET ${str} ${end}`);
     client.write(`GET / ${end}`);

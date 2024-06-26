@@ -26,16 +26,15 @@ const fixtures = require('../common/fixtures');
 const tmpdir = require('../common/tmpdir');
 const assert = require('assert');
 const fs = require('fs');
-const path = require('path');
 
 tmpdir.refresh();
 
 
-const nonexistentFile = path.join(tmpdir.path, 'non-existent');
-const nonexistentDir = path.join(tmpdir.path, 'non-existent', 'foo', 'bar');
-const existingFile = path.join(tmpdir.path, 'existingFile.js');
-const existingFile2 = path.join(tmpdir.path, 'existingFile2.js');
-const existingDir = path.join(tmpdir.path, 'dir');
+const nonexistentFile = tmpdir.resolve('non-existent');
+const nonexistentDir = tmpdir.resolve('non-existent', 'foo', 'bar');
+const existingFile = tmpdir.resolve('existingFile.js');
+const existingFile2 = tmpdir.resolve('existingFile2.js');
+const existingDir = tmpdir.resolve('dir');
 const existingDir2 = fixtures.path('keys');
 fs.mkdirSync(existingDir);
 fs.writeFileSync(existingFile, 'test', 'utf-8');
@@ -199,8 +198,7 @@ function re(literals, ...values) {
               `expect ${err.dest} to end with 'foo'`);
     const regexp = new RegExp('^ENOENT: no such file or directory, link ' +
                               re`'${nonexistentFile}' -> ` + '\'.*foo\'');
-    assert.ok(regexp.test(err.message),
-              `Expect ${err.message} to match ${regexp}`);
+    assert.match(err.message, regexp);
     assert.strictEqual(err.errno, UV_ENOENT);
     assert.strictEqual(err.code, 'ENOENT');
     assert.strictEqual(err.syscall, 'link');
@@ -291,15 +289,14 @@ function re(literals, ...values) {
               `expect ${err.dest} to end with 'foo'`);
     const regexp = new RegExp('ENOENT: no such file or directory, rename ' +
                               re`'${nonexistentFile}' -> ` + '\'.*foo\'');
-    assert.ok(regexp.test(err.message),
-              `Expect ${err.message} to match ${regexp}`);
+    assert.match(err.message, regexp);
     assert.strictEqual(err.errno, UV_ENOENT);
     assert.strictEqual(err.code, 'ENOENT');
     assert.strictEqual(err.syscall, 'rename');
     return true;
   };
 
-  const destFile = path.join(tmpdir.path, 'foo');
+  const destFile = tmpdir.resolve('foo');
   fs.rename(nonexistentFile, destFile, common.mustCall(validateError));
 
   assert.throws(
@@ -641,13 +638,11 @@ if (!common.isAIX) {
 {
   const validateError = (err) => {
     const pathPrefix = new RegExp('^' + re`${nonexistentDir}`);
-    assert(pathPrefix.test(err.path),
-           `Expect ${err.path} to match ${pathPrefix}`);
+    assert.match(err.path, pathPrefix);
 
     const prefix = new RegExp('^ENOENT: no such file or directory, mkdtemp ' +
                               re`'${nonexistentDir}`);
-    assert(prefix.test(err.message),
-           `Expect ${err.message} to match ${prefix}`);
+    assert.match(err.message, prefix);
 
     assert.strictEqual(err.errno, UV_ENOENT);
     assert.strictEqual(err.code, 'ENOENT');
@@ -663,21 +658,16 @@ if (!common.isAIX) {
   );
 }
 
-// Check copyFile with invalid flags.
+// Check copyFile with invalid modes.
 {
   const validateError = {
-    // TODO: Make sure the error message always also contains the src.
-    message: `EINVAL: invalid argument, copyfile -> '${nonexistentFile}'`,
-    errno: UV_EINVAL,
-    code: 'EINVAL',
-    syscall: 'copyfile'
+    code: 'ERR_OUT_OF_RANGE',
   };
 
-  fs.copyFile(existingFile, nonexistentFile, -1,
-              common.expectsError(validateError));
-
-  validateError.message = 'EINVAL: invalid argument, copyfile ' +
-                          `'${existingFile}' -> '${nonexistentFile}'`;
+  assert.throws(
+    () => fs.copyFile(existingFile, nonexistentFile, -1, () => {}),
+    validateError
+  );
   assert.throws(
     () => fs.copyFileSync(existingFile, nonexistentFile, -1),
     validateError

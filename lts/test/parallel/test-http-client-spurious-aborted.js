@@ -10,7 +10,7 @@ const N = 2;
 let abortRequest = true;
 
 const server = http.Server(common.mustCall((req, res) => {
-  const headers = { 'Content-Type': 'text/plain' };
+  const headers = { 'Content-Type': 'text/plain', 'Connection': 'close' };
   headers['Content-Length'] = 50;
   const socket = res.socket;
   res.writeHead(200, headers);
@@ -56,13 +56,22 @@ function download() {
       if (res.complete) res.readable = true;
       callback();
     };
-    res.on('end', common.mustCall(() => {
-      reqCountdown.dec();
-    }));
-    res.on('aborted', () => {
-      aborted = true;
-    });
-    res.on('error', common.mustNotCall());
+    if (!abortRequest) {
+      res.on('end', common.mustCall(() => {
+        reqCountdown.dec();
+      }));
+      res.on('error', common.mustNotCall());
+    } else {
+      res.on('aborted', common.mustCall(() => {
+        aborted = true;
+        reqCountdown.dec();
+        writable.end();
+      }));
+      res.on('error', common.expectsError({
+        code: 'ECONNRESET'
+      }));
+    }
+
     writable.on('finish', () => {
       assert.strictEqual(aborted, abortRequest);
       finishCountdown.dec();

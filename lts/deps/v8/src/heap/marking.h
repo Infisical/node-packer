@@ -14,7 +14,7 @@ namespace internal {
 class MarkBit {
  public:
   using CellType = uint32_t;
-  STATIC_ASSERT(sizeof(CellType) == sizeof(base::Atomic32));
+  static_assert(sizeof(CellType) == sizeof(base::Atomic32));
 
   inline MarkBit(CellType* cell, CellType mask) : cell_(cell), mask_(mask) {}
 
@@ -58,8 +58,9 @@ class MarkBit {
 template <>
 inline bool MarkBit::Set<AccessMode::NON_ATOMIC>() {
   CellType old_value = *cell_;
+  if ((old_value & mask_) == mask_) return false;
   *cell_ = old_value | mask_;
-  return (old_value & mask_) == 0;
+  return true;
 }
 
 template <>
@@ -98,16 +99,18 @@ class V8_EXPORT_PRIVATE Bitmap {
   static const uint32_t kBytesPerCell = kBitsPerCell / kBitsPerByte;
   static const uint32_t kBytesPerCellLog2 = kBitsPerCellLog2 - kBitsPerByteLog2;
 
-  static const size_t kLength = (1 << kPageSizeBits) >> (kTaggedSizeLog2);
+  // The length is the number of bits in this bitmap. (+1) accounts for
+  // the case where the markbits are queried for a one-word filler at the
+  // end of the page.
+  static const size_t kLength = ((1 << kPageSizeBits) >> kTaggedSizeLog2) + 1;
+  // The size of the bitmap in bytes is CellsCount() * kBytesPerCell.
+  static const size_t kSize;
 
-  static const size_t kSize = (1 << kPageSizeBits) >>
-                              (kTaggedSizeLog2 + kBitsPerByteLog2);
-
-  static int CellsForLength(int length) {
+  static constexpr size_t CellsForLength(int length) {
     return (length + kBitsPerCell - 1) >> kBitsPerCellLog2;
   }
 
-  int CellsCount() { return CellsForLength(kLength); }
+  static constexpr size_t CellsCount() { return CellsForLength(kLength); }
 
   V8_INLINE static uint32_t IndexToCell(uint32_t index) {
     return index >> kBitsPerCellLog2;
@@ -124,6 +127,10 @@ class V8_EXPORT_PRIVATE Bitmap {
 
   V8_INLINE MarkBit::CellType* cells() {
     return reinterpret_cast<MarkBit::CellType*>(this);
+  }
+
+  V8_INLINE const MarkBit::CellType* cells() const {
+    return reinterpret_cast<const MarkBit::CellType*>(this);
   }
 
   V8_INLINE static Bitmap* FromAddress(Address addr) {
@@ -349,7 +356,6 @@ class Marking : public AllStatic {
   // ATOMIC as soon we add concurrency.
 
   // Impossible markbits: 01
-  static const char* kImpossibleBitPattern;
   template <AccessMode mode = AccessMode::NON_ATOMIC>
   V8_INLINE static bool IsImpossible(MarkBit mark_bit) {
     if (mode == AccessMode::NON_ATOMIC) {
@@ -367,14 +373,12 @@ class Marking : public AllStatic {
   }
 
   // Black markbits: 11
-  static const char* kBlackBitPattern;
   template <AccessMode mode = AccessMode::NON_ATOMIC>
   V8_INLINE static bool IsBlack(MarkBit mark_bit) {
     return mark_bit.Get<mode>() && mark_bit.Next().Get<mode>();
   }
 
   // White markbits: 00 - this is required by the mark bit clearer.
-  static const char* kWhiteBitPattern;
   template <AccessMode mode = AccessMode::NON_ATOMIC>
   V8_INLINE static bool IsWhite(MarkBit mark_bit) {
     DCHECK(!IsImpossible<mode>(mark_bit));
@@ -382,7 +386,6 @@ class Marking : public AllStatic {
   }
 
   // Grey markbits: 10
-  static const char* kGreyBitPattern;
   template <AccessMode mode = AccessMode::NON_ATOMIC>
   V8_INLINE static bool IsGrey(MarkBit mark_bit) {
     return mark_bit.Get<mode>() && !mark_bit.Next().Get<mode>();
@@ -397,7 +400,7 @@ class Marking : public AllStatic {
 
   template <AccessMode mode = AccessMode::NON_ATOMIC>
   V8_INLINE static void MarkWhite(MarkBit markbit) {
-    STATIC_ASSERT(mode == AccessMode::NON_ATOMIC);
+    static_assert(mode == AccessMode::NON_ATOMIC);
     markbit.Clear<mode>();
     markbit.Next().Clear<mode>();
   }
@@ -424,34 +427,6 @@ class Marking : public AllStatic {
   template <AccessMode mode = AccessMode::NON_ATOMIC>
   V8_INLINE static bool GreyToBlack(MarkBit markbit) {
     return markbit.Get<mode>() && markbit.Next().Set<mode>();
-  }
-
-  enum ObjectColor {
-    BLACK_OBJECT,
-    WHITE_OBJECT,
-    GREY_OBJECT,
-    IMPOSSIBLE_COLOR
-  };
-
-  static const char* ColorName(ObjectColor color) {
-    switch (color) {
-      case BLACK_OBJECT:
-        return "black";
-      case WHITE_OBJECT:
-        return "white";
-      case GREY_OBJECT:
-        return "grey";
-      case IMPOSSIBLE_COLOR:
-        return "impossible";
-    }
-    return "error";
-  }
-
-  static ObjectColor Color(MarkBit mark_bit) {
-    if (IsBlack(mark_bit)) return BLACK_OBJECT;
-    if (IsWhite(mark_bit)) return WHITE_OBJECT;
-    if (IsGrey(mark_bit)) return GREY_OBJECT;
-    UNREACHABLE();
   }
 
  private:

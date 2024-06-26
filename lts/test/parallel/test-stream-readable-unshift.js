@@ -113,23 +113,6 @@ const { Readable } = require('stream');
 }
 
 {
-  // Check that error is thrown for invalid chunks
-
-  const readable = new Readable({ read() {} });
-  function checkError(fn) {
-    assert.throws(fn, {
-      code: 'ERR_INVALID_ARG_TYPE',
-      name: 'TypeError'
-    });
-  }
-
-  checkError(() => readable.unshift([]));
-  checkError(() => readable.unshift({}));
-  checkError(() => readable.unshift(0));
-
-}
-
-{
   // Check that ObjectMode works
   const readable = new Readable({ objectMode: true, read() {} });
 
@@ -182,6 +165,6 @@ const { Readable } = require('stream');
 
   const stream = new ArrayReader();
   stream.once('readable', common.mustCall(onRead));
-  stream.on('end', common.mustCall(() => {}));
+  stream.on('end', common.mustCall());
 
 }

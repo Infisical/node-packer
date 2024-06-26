@@ -22,12 +22,11 @@
 'use strict';
 const common = require('../common');
 const assert = require('assert');
-const path = require('path');
 const fs = require('fs');
 
 const tmpdir = require('../common/tmpdir');
 
-const file = path.join(tmpdir.path, 'write.txt');
+const file = tmpdir.resolve('write.txt');
 
 tmpdir.refresh();
 
@@ -38,6 +37,7 @@ tmpdir.refresh();
   fs.close = function(fd) {
     assert.ok(fd, 'fs.close must not be called without an undefined fd.');
     fs.close = _fs_close;
+    fs.closeSync(fd);
   };
   stream.destroy();
 }
@@ -55,13 +55,12 @@ tmpdir.refresh();
 // Throws if data is not of type Buffer.
 {
   const stream = fs.createWriteStream(file);
-  stream.on('error', common.expectsError({
+  stream.on('error', common.mustNotCall());
+  assert.throws(() => {
+    stream.write(42);
+  }, {
     code: 'ERR_INVALID_ARG_TYPE',
     name: 'TypeError'
-  }));
-  stream.write(42, null, common.expectsError({
-    code: 'ERR_INVALID_ARG_TYPE',
-    name: 'TypeError'
-  }));
+  });
   stream.destroy();
 }

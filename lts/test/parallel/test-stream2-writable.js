@@ -22,8 +22,7 @@
 'use strict';
 
 const common = require('../common');
-const W = require('_stream_writable');
-const D = require('_stream_duplex');
+const { Writable: W, Duplex: D } = require('stream');
 const assert = require('assert');
 
 class TestWriter extends W {
@@ -195,7 +194,8 @@ for (let i = 0; i < chunks.length; i++) {
 {
   // Verify write callbacks
   const callbacks = chunks.map(function(chunk, i) {
-    return [i, function() {
+    return [i, function(err) {
+      assert.strictEqual(err, null);
       callbacks._called[i] = chunk;
     }];
   }).reduce(function(set, x) {
@@ -226,7 +226,9 @@ for (let i = 0; i < chunks.length; i++) {
 {
   // Verify end() callback
   const tw = new TestWriter();
-  tw.end(common.mustCall());
+  tw.end(common.mustCall(function(err) {
+    assert.strictEqual(err, null);
+  }));
 }
 
 const helloWorldBuffer = Buffer.from('hello world');
@@ -234,7 +236,9 @@ const helloWorldBuffer = Buffer.from('hello world');
 {
   // Verify end() callback with chunk
   const tw = new TestWriter();
-  tw.end(helloWorldBuffer, common.mustCall());
+  tw.end(helloWorldBuffer, common.mustCall(function(err) {
+    assert.strictEqual(err, null);
+  }));
 }
 
 {
@@ -275,7 +279,7 @@ const helloWorldBuffer = Buffer.from('hello world');
 
 {
   // Verify writables cannot be piped
-  const w = new W();
+  const w = new W({ autoDestroy: false });
   w._write = common.mustNotCall();
   let gotError = false;
   w.on('error', function() {
@@ -399,6 +403,62 @@ const helloWorldBuffer = Buffer.from('hello world');
   w.on('finish', common.mustCall(function() {
     assert.strictEqual(shutdown, true);
   }));
+  w.write(Buffer.allocUnsafe(1));
+  w.end(Buffer.allocUnsafe(0));
+}
+
+{
+  // Verify that error is only emitted once when failing in _finish.
+  const w = new W();
+
+  w._final = common.mustCall(function(cb) {
+    cb(new Error('test'));
+  });
+  w.on('error', common.mustCall((err) => {
+    assert.strictEqual(w._writableState.errorEmitted, true);
+    assert.strictEqual(err.message, 'test');
+    w.on('error', common.mustNotCall());
+    w.destroy(new Error());
+  }));
+  w.end();
+}
+
+{
+  // Verify that error is only emitted once when failing in write.
+  const w = new W();
+  w.on('error', common.mustNotCall());
+  assert.throws(() => {
+    w.write(null);
+  }, {
+    code: 'ERR_STREAM_NULL_VALUES'
+  });
+}
+
+{
+  // Verify that error is only emitted once when failing in write after end.
+  const w = new W();
+  w.on('error', common.mustCall((err) => {
+    assert.strictEqual(w._writableState.errorEmitted, true);
+    assert.strictEqual(err.code, 'ERR_STREAM_WRITE_AFTER_END');
+  }));
+  w.end();
+  w.write('hello');
+  w.destroy(new Error());
+}
+
+{
+  // Verify that finish is not emitted after error
+  const w = new W();
+
+  w._final = common.mustCall(function(cb) {
+    cb(new Error());
+  });
+  w._write = function(chunk, e, cb) {
+    process.nextTick(cb);
+  };
+  w.on('error', common.mustCall());
+  w.on('prefinish', common.mustNotCall());
+  w.on('finish', common.mustNotCall());
   w.write(Buffer.allocUnsafe(1));
   w.end(Buffer.allocUnsafe(0));
 }

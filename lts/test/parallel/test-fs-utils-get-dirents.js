@@ -7,7 +7,6 @@ const assert = require('assert');
 const { internalBinding } = require('internal/test/binding');
 const { UV_DIRENT_UNKNOWN } = internalBinding('constants').fs;
 const fs = require('fs');
-const path = require('path');
 
 const tmpdir = require('../common/tmpdir');
 const filename = 'foo';
@@ -15,7 +14,7 @@ const filename = 'foo';
 {
   // setup
   tmpdir.refresh();
-  fs.writeFileSync(path.join(tmpdir.path, filename), '');
+  fs.writeFileSync(tmpdir.resolve(filename), '');
 }
 // getDirents
 {
@@ -61,7 +60,7 @@ const filename = 'foo';
         err.message,
         [
           'The "path" argument must be of type string or an ' +
-          'instance of Buffer. Received type number (42)'
+          'instance of Buffer. Received type number (42)',
         ].join(''));
     },
     ));
@@ -116,7 +115,7 @@ const filename = 'foo';
         err.message,
         [
           'The "path" argument must be of type string or an ' +
-          'instance of Buffer. Received type number (42)'
+          'instance of Buffer. Received type number (42)',
         ].join(''));
     },
     ));

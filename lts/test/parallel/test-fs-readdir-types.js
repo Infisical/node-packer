@@ -29,7 +29,7 @@ tmpdir.refresh();
 
 // Create the necessary files
 files.forEach(function(currentFile) {
-  fs.closeSync(fs.openSync(`${readdirDir}/${currentFile}`, 'w'));
+  fs.writeFileSync(`${readdirDir}/${currentFile}`, '', 'utf8');
 });
 
 
@@ -67,8 +67,7 @@ fs.readdir(__filename, {
 // Check the readdir async version
 fs.readdir(readdirDir, {
   withFileTypes: true
-}, common.mustCall((err, dirents) => {
-  assert.ifError(err);
+}, common.mustSucceed((dirents) => {
   assertDirents(dirents);
 }));
 
@@ -77,11 +76,12 @@ fs.readdir(readdirDir, {
     withFileTypes: true
   });
   assertDirents(dirents);
-})();
+})().then(common.mustCall());
 
 // Check for correct types when the binding returns unknowns
 const UNKNOWN = constants.UV_DIRENT_UNKNOWN;
 const oldReaddir = binding.readdir;
+process.on('beforeExit', () => { binding.readdir = oldReaddir; });
 binding.readdir = common.mustCall((path, encoding, types, req, ctx) => {
   if (req) {
     const oldCb = req.oncomplete;
@@ -95,7 +95,7 @@ binding.readdir = common.mustCall((path, encoding, types, req, ctx) => {
     };
     oldReaddir(path, encoding, types, req);
   } else {
-    const results = oldReaddir(path, encoding, types, req, ctx);
+    const results = oldReaddir(path, encoding, types);
     results[1] = results[1].map(() => UNKNOWN);
     return results;
   }
@@ -103,8 +103,7 @@ binding.readdir = common.mustCall((path, encoding, types, req, ctx) => {
 assertDirents(fs.readdirSync(readdirDir, { withFileTypes: true }));
 fs.readdir(readdirDir, {
   withFileTypes: true
-}, common.mustCall((err, dirents) => {
-  assert.ifError(err);
+}, common.mustSucceed((dirents) => {
   assertDirents(dirents);
 }));
 

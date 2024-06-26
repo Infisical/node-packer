@@ -14,11 +14,9 @@
 namespace v8 {
 namespace internal {
 
-//
-// VMState class implementation.  A simple stack of VM states held by the
-// logger and partially threaded through the call stack.  States are pushed by
-// VMState construction and popped by destruction.
-//
+// VMState class implementation. A simple stack of VM states held by the logger
+// and partially threaded through the call stack. States are pushed by VMState
+// construction and popped by destruction.
 inline const char* StateToString(StateTag state) {
   switch (state) {
     case JS:
@@ -35,6 +33,8 @@ inline const char* StateToString(StateTag state) {
       return "OTHER";
     case EXTERNAL:
       return "EXTERNAL";
+    case ATOMICS_WAIT:
+      return "ATOMICS_WAIT";
     case IDLE:
       return "IDLE";
   }
@@ -52,19 +52,20 @@ VMState<Tag>::~VMState() {
 }
 
 ExternalCallbackScope::ExternalCallbackScope(Isolate* isolate, Address callback)
-    : isolate_(isolate),
-      callback_(callback),
-      previous_scope_(isolate->external_callback_scope()) {
+    : callback_(callback),
+      previous_scope_(isolate->external_callback_scope()),
+      vm_state_(isolate),
+      pause_timed_histogram_scope_(isolate->counters()->execute()) {
 #ifdef USE_SIMULATOR
   scope_address_ = Simulator::current(isolate)->get_sp();
 #endif
-  isolate_->set_external_callback_scope(this);
+  vm_state_.isolate_->set_external_callback_scope(this);
   TRACE_EVENT_BEGIN0(TRACE_DISABLED_BY_DEFAULT("v8.runtime"),
                      "V8.ExternalCallback");
 }
 
 ExternalCallbackScope::~ExternalCallbackScope() {
-  isolate_->set_external_callback_scope(previous_scope_);
+  vm_state_.isolate_->set_external_callback_scope(previous_scope_);
   TRACE_EVENT_END0(TRACE_DISABLED_BY_DEFAULT("v8.runtime"),
                    "V8.ExternalCallback");
 }

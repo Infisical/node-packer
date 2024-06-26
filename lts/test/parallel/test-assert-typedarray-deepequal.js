@@ -25,12 +25,12 @@ const equalArrayPairs = [
   [new Uint16Array([1, 2, 3, 4]).subarray(1), new Uint16Array([2, 3, 4])],
   [new Uint32Array([1, 2, 3, 4]).subarray(1, 3), new Uint32Array([2, 3])],
   [new ArrayBuffer(3), new ArrayBuffer(3)],
-  [new SharedArrayBuffer(3), new SharedArrayBuffer(3)]
+  [new SharedArrayBuffer(3), new SharedArrayBuffer(3)],
 ];
 
 const looseEqualArrayPairs = [
   [new Float32Array([+0.0]), new Float32Array([-0.0])],
-  [new Float64Array([+0.0]), new Float64Array([-0.0])]
+  [new Float64Array([+0.0]), new Float64Array([-0.0])],
 ];
 
 const notEqualArrayPairs = [
@@ -52,33 +52,33 @@ const notEqualArrayPairs = [
   [new Uint8Array([1, 2, 3]).buffer, new Uint8Array([4, 5, 6]).buffer],
   [
     new Uint8Array(new SharedArrayBuffer(3)).fill(1).buffer,
-    new Uint8Array(new SharedArrayBuffer(3)).fill(2).buffer
+    new Uint8Array(new SharedArrayBuffer(3)).fill(2).buffer,
   ],
   [new ArrayBuffer(2), new ArrayBuffer(3)],
   [new SharedArrayBuffer(2), new SharedArrayBuffer(3)],
   [new ArrayBuffer(2), new SharedArrayBuffer(3)],
   [
     new Uint8Array(new ArrayBuffer(3)).fill(1).buffer,
-    new Uint8Array(new SharedArrayBuffer(3)).fill(2).buffer
-  ]
+    new Uint8Array(new SharedArrayBuffer(3)).fill(2).buffer,
+  ],
 ];
 
-equalArrayPairs.forEach((arrayPair) => {
+for (const arrayPair of equalArrayPairs) {
   // eslint-disable-next-line no-restricted-properties
   assert.deepEqual(arrayPair[0], arrayPair[1]);
   assert.deepStrictEqual(arrayPair[0], arrayPair[1]);
-});
+}
 
-looseEqualArrayPairs.forEach((arrayPair) => {
+for (const arrayPair of looseEqualArrayPairs) {
   // eslint-disable-next-line no-restricted-properties
   assert.deepEqual(arrayPair[0], arrayPair[1]);
   assert.throws(
     makeBlock(assert.deepStrictEqual, arrayPair[0], arrayPair[1]),
     assert.AssertionError
   );
-});
+}
 
-notEqualArrayPairs.forEach((arrayPair) => {
+for (const arrayPair of notEqualArrayPairs) {
   assert.throws(
     // eslint-disable-next-line no-restricted-properties
     makeBlock(assert.deepEqual, arrayPair[0], arrayPair[1]),
@@ -88,4 +88,4 @@ notEqualArrayPairs.forEach((arrayPair) => {
     makeBlock(assert.deepStrictEqual, arrayPair[0], arrayPair[1]),
     assert.AssertionError
   );
-});
+}

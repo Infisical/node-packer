@@ -4,6 +4,7 @@
 
 #include "src/objects/property-descriptor.h"
 
+#include "src/common/assert-scope.h"
 #include "src/execution/isolate-inl.h"
 #include "src/heap/factory.h"
 #include "src/heap/heap-inl.h"  // For ToBoolean. TODO(jkummerow): Drop.
@@ -22,7 +23,7 @@ namespace {
 // Returns false if an exception was thrown.
 bool GetPropertyIfPresent(Handle<JSReceiver> receiver, Handle<String> name,
                           Handle<Object>* value) {
-  LookupIterator it(receiver, name, receiver);
+  LookupIterator it(receiver->GetIsolate(), receiver, name, receiver);
   // 4. Let hasEnumerable be HasProperty(Obj, "enumerable").
   Maybe<bool> has_property = JSReceiver::HasProperty(&it);
   // 5. ReturnIfAbrupt(hasEnumerable).
@@ -42,48 +43,56 @@ bool GetPropertyIfPresent(Handle<JSReceiver> receiver, Handle<String> name,
 // the entire conversion!
 bool ToPropertyDescriptorFastPath(Isolate* isolate, Handle<JSReceiver> obj,
                                   PropertyDescriptor* desc) {
-  if (!obj->IsJSObject()) return false;
-  Map map = Handle<JSObject>::cast(obj)->map();
-  if (map.instance_type() != JS_OBJECT_TYPE) return false;
-  if (map.is_access_check_needed()) return false;
-  if (map.prototype() != *isolate->initial_object_prototype()) return false;
-  // During bootstrapping, the object_function_prototype_map hasn't been
-  // set up yet.
-  if (isolate->bootstrapper()->IsActive()) return false;
-  if (JSObject::cast(map.prototype()).map() !=
-      isolate->native_context()->object_function_prototype_map()) {
-    return false;
+  {
+    DisallowGarbageCollection no_gc;
+    auto raw_obj = *obj;
+    if (!raw_obj.IsJSObject()) return false;
+    Map raw_map = raw_obj.map(isolate);
+    if (raw_map.instance_type() != JS_OBJECT_TYPE) return false;
+    if (raw_map.is_access_check_needed()) return false;
+    if (raw_map.prototype() != *isolate->initial_object_prototype())
+      return false;
+    // During bootstrapping, the object_function_prototype_map hasn't been
+    // set up yet.
+    if (isolate->bootstrapper()->IsActive()) return false;
+    if (JSObject::cast(raw_map.prototype()).map() !=
+        isolate->raw_native_context().object_function_prototype_map()) {
+      return false;
+    }
+    // TODO(jkummerow): support dictionary properties?
+    if (raw_map.is_dictionary_map()) return false;
   }
-  // TODO(jkummerow): support dictionary properties?
-  if (map.is_dictionary_map()) return false;
+
+  Handle<Map> map(obj->map(isolate), isolate);
+
   Handle<DescriptorArray> descs =
-      Handle<DescriptorArray>(map.instance_descriptors(), isolate);
-  for (int i = 0; i < map.NumberOfOwnDescriptors(); i++) {
+      Handle<DescriptorArray>(map->instance_descriptors(isolate), isolate);
+  ReadOnlyRoots roots(isolate);
+  for (InternalIndex i : map->IterateOwnDescriptors()) {
     PropertyDetails details = descs->GetDetails(i);
-    Name key = descs->GetKey(i);
     Handle<Object> value;
-    if (details.location() == kField) {
-      if (details.kind() == kData) {
-        value = JSObject::FastPropertyAt(Handle<JSObject>::cast(obj),
+    if (details.location() == PropertyLocation::kField) {
+      if (details.kind() == PropertyKind::kData) {
+        value = JSObject::FastPropertyAt(isolate, Handle<JSObject>::cast(obj),
                                          details.representation(),
-                                         FieldIndex::ForDescriptor(map, i));
+                                         FieldIndex::ForDetails(*map, details));
       } else {
-        DCHECK_EQ(kAccessor, details.kind());
+        DCHECK_EQ(PropertyKind::kAccessor, details.kind());
         // Bail out to slow path.
         return false;
       }
 
     } else {
-      DCHECK_EQ(kDescriptor, details.location());
-      if (details.kind() == kData) {
+      DCHECK_EQ(PropertyLocation::kDescriptor, details.location());
+      if (details.kind() == PropertyKind::kData) {
         value = handle(descs->GetStrongValue(i), isolate);
       } else {
-        DCHECK_EQ(kAccessor, details.kind());
+        DCHECK_EQ(PropertyKind::kAccessor, details.kind());
         // Bail out to slow path.
         return false;
       }
     }
-    ReadOnlyRoots roots(isolate);
+    Name key = descs->GetKey(i);
     if (key == roots.enumerable_string()) {
       desc->set_enumerable(value->BooleanValue(isolate));
     } else if (key == roots.configurable_string()) {
@@ -112,7 +121,8 @@ bool ToPropertyDescriptorFastPath(Isolate* isolate, Handle<JSReceiver> obj,
 
 void CreateDataProperty(Handle<JSObject> object, Handle<String> name,
                         Handle<Object> value) {
-  LookupIterator it(object, name, object, LookupIterator::OWN_SKIP_INTERCEPTOR);
+  LookupIterator it(object->GetIsolate(), object, name, object,
+                    LookupIterator::OWN_SKIP_INTERCEPTOR);
   Maybe<bool> result = JSObject::CreateDataProperty(&it, value);
   CHECK(result.IsJust() && result.FromJust());
 }
@@ -340,8 +350,8 @@ void PropertyDescriptor::CompletePropertyDescriptor(Isolate* isolate,
 
 Handle<PropertyDescriptorObject> PropertyDescriptor::ToPropertyDescriptorObject(
     Isolate* isolate) {
-  Handle<PropertyDescriptorObject> obj = Handle<PropertyDescriptorObject>::cast(
-      isolate->factory()->NewFixedArray(PropertyDescriptorObject::kLength));
+  Handle<PropertyDescriptorObject> obj =
+      isolate->factory()->NewPropertyDescriptorObject();
 
   int flags =
       PropertyDescriptorObject::IsEnumerableBit::encode(enumerable_) |
@@ -354,14 +364,11 @@ Handle<PropertyDescriptorObject> PropertyDescriptor::ToPropertyDescriptorObject(
       PropertyDescriptorObject::HasGetBit::encode(has_get()) |
       PropertyDescriptorObject::HasSetBit::encode(has_set());
 
-  obj->set(PropertyDescriptorObject::kFlagsIndex, Smi::FromInt(flags));
+  obj->set_flags(flags);
 
-  obj->set(PropertyDescriptorObject::kValueIndex,
-           has_value() ? *value_ : ReadOnlyRoots(isolate).the_hole_value());
-  obj->set(PropertyDescriptorObject::kGetIndex,
-           has_get() ? *get_ : ReadOnlyRoots(isolate).the_hole_value());
-  obj->set(PropertyDescriptorObject::kSetIndex,
-           has_set() ? *set_ : ReadOnlyRoots(isolate).the_hole_value());
+  if (has_value()) obj->set_value(*value_);
+  if (has_get()) obj->set_get(*get_);
+  if (has_set()) obj->set_set(*set_);
 
   return obj;
 }

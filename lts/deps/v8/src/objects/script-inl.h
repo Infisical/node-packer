@@ -5,8 +5,8 @@
 #ifndef V8_OBJECTS_SCRIPT_INL_H_
 #define V8_OBJECTS_SCRIPT_INL_H_
 
+#include "src/objects/managed.h"
 #include "src/objects/script.h"
-
 #include "src/objects/shared-function-info.h"
 #include "src/objects/smi-inl.h"
 #include "src/objects/string-inl.h"
@@ -17,34 +17,35 @@
 namespace v8 {
 namespace internal {
 
-OBJECT_CONSTRUCTORS_IMPL(Script, Struct)
+#include "torque-generated/src/objects/script-tq-inl.inc"
+
+TQ_OBJECT_CONSTRUCTORS_IMPL(Script)
 
 NEVER_READ_ONLY_SPACE_IMPL(Script)
 
-CAST_ACCESSOR(Script)
-
-ACCESSORS(Script, source, Object, kSourceOffset)
-ACCESSORS(Script, name, Object, kNameOffset)
-SMI_ACCESSORS(Script, id, kIdOffset)
-SMI_ACCESSORS(Script, line_offset, kLineOffsetOffset)
-SMI_ACCESSORS(Script, column_offset, kColumnOffsetOffset)
-ACCESSORS(Script, context_data, Object, kContextOffset)
-SMI_ACCESSORS(Script, type, kScriptTypeOffset)
-ACCESSORS(Script, line_ends, Object, kLineEndsOffset)
-ACCESSORS_CHECKED(Script, eval_from_shared_or_wrapped_arguments, Object,
-                  kEvalFromSharedOrWrappedArgumentsOffset,
-                  this->type() != TYPE_WASM)
-SMI_ACCESSORS_CHECKED(Script, eval_from_position, kEvalFromPositionOffset,
-                      this->type() != TYPE_WASM)
-ACCESSORS(Script, shared_function_infos, WeakFixedArray,
-          kSharedFunctionInfosOffset)
-SMI_ACCESSORS(Script, flags, kFlagsOffset)
-ACCESSORS(Script, source_url, Object, kSourceUrlOffset)
-ACCESSORS(Script, source_mapping_url, Object, kSourceMappingUrlOffset)
-ACCESSORS(Script, host_defined_options, FixedArray, kHostDefinedOptionsOffset)
-ACCESSORS_CHECKED(Script, wasm_module_object, Object,
+#if V8_ENABLE_WEBASSEMBLY
+ACCESSORS_CHECKED(Script, wasm_breakpoint_infos, FixedArray,
                   kEvalFromSharedOrWrappedArgumentsOffset,
                   this->type() == TYPE_WASM)
+ACCESSORS_CHECKED(Script, wasm_managed_native_module, Object,
+                  kEvalFromPositionOffset, this->type() == TYPE_WASM)
+ACCESSORS_CHECKED(Script, wasm_weak_instance_list, WeakArrayList,
+                  kSharedFunctionInfosOffset, this->type() == TYPE_WASM)
+#define CHECK_SCRIPT_NOT_WASM this->type() != TYPE_WASM
+#else
+#define CHECK_SCRIPT_NOT_WASM true
+#endif  // V8_ENABLE_WEBASSEMBLY
+
+SMI_ACCESSORS(Script, type, kScriptTypeOffset)
+ACCESSORS_CHECKED(Script, eval_from_shared_or_wrapped_arguments, Object,
+                  kEvalFromSharedOrWrappedArgumentsOffset,
+                  CHECK_SCRIPT_NOT_WASM)
+SMI_ACCESSORS_CHECKED(Script, eval_from_position, kEvalFromPositionOffset,
+                      CHECK_SCRIPT_NOT_WASM)
+#undef CHECK_SCRIPT_NOT_WASM
+
+ACCESSORS(Script, compiled_lazy_function_positions, Object,
+          kCompiledLazyFunctionPositionsOffset)
 
 bool Script::is_wrapped() const {
   return eval_from_shared_or_wrapped_arguments().IsFixedArray();
@@ -75,31 +76,77 @@ FixedArray Script::wrapped_arguments() const {
   return FixedArray::cast(eval_from_shared_or_wrapped_arguments());
 }
 
+DEF_GETTER(Script, shared_function_infos, WeakFixedArray) {
+#if V8_ENABLE_WEBASSEMBLY
+  if (type() == TYPE_WASM) {
+    return ReadOnlyRoots(GetHeap()).empty_weak_fixed_array();
+  }
+#endif  // V8_ENABLE_WEBASSEMBLY
+  return TaggedField<WeakFixedArray, kSharedFunctionInfosOffset>::load(*this);
+}
+
+void Script::set_shared_function_infos(WeakFixedArray value,
+                                       WriteBarrierMode mode) {
+#if V8_ENABLE_WEBASSEMBLY
+  DCHECK_NE(TYPE_WASM, type());
+#endif  // V8_ENABLE_WEBASSEMBLY
+  TaggedField<WeakFixedArray, kSharedFunctionInfosOffset>::store(*this, value);
+  CONDITIONAL_WRITE_BARRIER(*this, kSharedFunctionInfosOffset, value, mode);
+}
+
+int Script::shared_function_info_count() const {
+  return shared_function_infos().length();
+}
+
+#if V8_ENABLE_WEBASSEMBLY
+bool Script::has_wasm_breakpoint_infos() const {
+  return type() == TYPE_WASM && wasm_breakpoint_infos().length() > 0;
+}
+
+wasm::NativeModule* Script::wasm_native_module() const {
+  return Managed<wasm::NativeModule>::cast(wasm_managed_native_module()).raw();
+}
+
+bool Script::break_on_entry() const { return BreakOnEntryBit::decode(flags()); }
+
+void Script::set_break_on_entry(bool value) {
+  set_flags(BreakOnEntryBit::update(flags(), value));
+}
+#endif  // V8_ENABLE_WEBASSEMBLY
+
 Script::CompilationType Script::compilation_type() {
-  return BooleanBit::get(flags(), kCompilationTypeBit) ? COMPILATION_TYPE_EVAL
-                                                       : COMPILATION_TYPE_HOST;
+  return CompilationTypeBit::decode(flags());
 }
 void Script::set_compilation_type(CompilationType type) {
-  set_flags(BooleanBit::set(flags(), kCompilationTypeBit,
-                            type == COMPILATION_TYPE_EVAL));
+  set_flags(CompilationTypeBit::update(flags(), type));
 }
 Script::CompilationState Script::compilation_state() {
-  return BooleanBit::get(flags(), kCompilationStateBit)
-             ? COMPILATION_STATE_COMPILED
-             : COMPILATION_STATE_INITIAL;
+  return CompilationStateBit::decode(flags());
 }
 void Script::set_compilation_state(CompilationState state) {
-  set_flags(BooleanBit::set(flags(), kCompilationStateBit,
-                            state == COMPILATION_STATE_COMPILED));
+  set_flags(CompilationStateBit::update(flags(), state));
 }
+
+bool Script::produce_compile_hints() const {
+  return ProduceCompileHintsBit::decode(flags());
+}
+
+void Script::set_produce_compile_hints(bool produce_compile_hints) {
+  set_flags(ProduceCompileHintsBit::update(flags(), produce_compile_hints));
+}
+
+bool Script::is_repl_mode() const { return IsReplModeBit::decode(flags()); }
+
+void Script::set_is_repl_mode(bool value) {
+  set_flags(IsReplModeBit::update(flags(), value));
+}
+
 ScriptOriginOptions Script::origin_options() {
-  return ScriptOriginOptions((flags() & kOriginOptionsMask) >>
-                             kOriginOptionsShift);
+  return ScriptOriginOptions(OriginOptionsBits::decode(flags()));
 }
 void Script::set_origin_options(ScriptOriginOptions origin_options) {
-  DCHECK(!(origin_options.Flags() & ~((1 << kOriginOptionsSize) - 1)));
-  set_flags((flags() & ~kOriginOptionsMask) |
-            (origin_options.Flags() << kOriginOptionsShift));
+  DCHECK(!(origin_options.Flags() & ~((1 << OriginOptionsBits::kSize) - 1)));
+  set_flags(OriginOptionsBits::update(flags(), origin_options.Flags()));
 }
 
 bool Script::HasValidSource() {
@@ -113,6 +160,16 @@ bool Script::HasValidSource() {
     return ExternalTwoByteString::cast(src).resource() != nullptr;
   }
   return true;
+}
+
+bool Script::HasSourceURLComment() const {
+  return source_url().IsString() && String::cast(source_url()).length() != 0;
+}
+
+bool Script::IsMaybeUnfinalized(Isolate* isolate) const {
+  // TODO(v8:12051): A more robust detection, e.g. with a dedicated sentinel
+  // value.
+  return source().IsUndefined(isolate) || String::cast(source()).length() == 0;
 }
 
 }  // namespace internal

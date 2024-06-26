@@ -1,12 +1,11 @@
 'use strict';
 const common = require('../common');
 const assert = require('assert');
-const path = require('path');
 const fs = require('fs');
 
 const tmpdir = require('../common/tmpdir');
 
-const file = path.join(tmpdir.path, 'write-autoclose-opt1.txt');
+const file = tmpdir.resolve('write-autoclose-opt1.txt');
 tmpdir.refresh();
 let stream = fs.createWriteStream(file, { flags: 'w+', autoClose: false });
 stream.write('Test1');
@@ -27,8 +26,8 @@ function next() {
   stream.end();
   stream.on('finish', common.mustCall(function() {
     assert.strictEqual(stream.closed, false);
-    assert.strictEqual(stream.fd, null);
     stream.on('close', common.mustCall(function() {
+      assert.strictEqual(stream.fd, null);
       assert.strictEqual(stream.closed, true);
       process.nextTick(next2);
     }));
@@ -51,8 +50,8 @@ function next3() {
   stream.end();
   stream.on('finish', common.mustCall(function() {
     assert.strictEqual(stream.closed, false);
-    assert.strictEqual(stream.fd, null);
     stream.on('close', common.mustCall(function() {
+      assert.strictEqual(stream.fd, null);
       assert.strictEqual(stream.closed, true);
     }));
   }));

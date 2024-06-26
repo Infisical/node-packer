@@ -26,7 +26,7 @@ class InstructionOperandConverter {
 
   // -- Instruction operand accesses with conversions --------------------------
 
-  Register InputRegister(size_t index) {
+  Register InputRegister(size_t index) const {
     return ToRegister(instr_->InputAt(index));
   }
 
@@ -51,7 +51,7 @@ class InstructionOperandConverter {
   }
 
   uint32_t InputUint32(size_t index) {
-    return bit_cast<uint32_t>(InputInt32(index));
+    return base::bit_cast<uint32_t>(InputInt32(index));
   }
 
   int64_t InputInt64(size_t index) {
@@ -60,6 +60,10 @@ class InstructionOperandConverter {
 
   int8_t InputInt8(size_t index) {
     return static_cast<int8_t>(InputInt32(index));
+  }
+
+  uint8_t InputUint8(size_t index) {
+    return base::bit_cast<uint8_t>(InputInt8(index));
   }
 
   int16_t InputInt16(size_t index) {
@@ -96,7 +100,7 @@ class InstructionOperandConverter {
     return ToRpoNumber(instr_->InputAt(index));
   }
 
-  Register OutputRegister(size_t index = 0) {
+  Register OutputRegister(size_t index = 0) const {
     return ToRegister(instr_->OutputAt(index));
   }
 
@@ -112,6 +116,10 @@ class InstructionOperandConverter {
     return ToDoubleRegister(instr_->Output());
   }
 
+  DoubleRegister TempDoubleRegister(size_t index) {
+    return ToDoubleRegister(instr_->TempAt(index));
+  }
+
   Simd128Register OutputSimd128Register() {
     return ToSimd128Register(instr_->Output());
   }
@@ -119,6 +127,20 @@ class InstructionOperandConverter {
   Simd128Register TempSimd128Register(size_t index) {
     return ToSimd128Register(instr_->TempAt(index));
   }
+
+#if defined(V8_TARGET_ARCH_X64)
+  Simd256Register InputSimd256Register(size_t index) {
+    return ToSimd256Register(instr_->InputAt(index));
+  }
+
+  Simd256Register OutputSimd256Register() {
+    return ToSimd256Register(instr_->Output());
+  }
+
+  Simd256Register TempSimd256Register(size_t index) {
+    return ToSimd256Register(instr_->TempAt(index));
+  }
+#endif
 
   // -- Conversions for operands -----------------------------------------------
 
@@ -130,7 +152,7 @@ class InstructionOperandConverter {
     return ToConstant(op).ToRpoNumber();
   }
 
-  Register ToRegister(InstructionOperand* op) {
+  Register ToRegister(InstructionOperand* op) const {
     return LocationOperand::cast(op)->GetRegister();
   }
 
@@ -146,7 +168,13 @@ class InstructionOperandConverter {
     return LocationOperand::cast(op)->GetSimd128Register();
   }
 
-  Constant ToConstant(InstructionOperand* op) {
+#if defined(V8_TARGET_ARCH_X64)
+  Simd256Register ToSimd256Register(InstructionOperand* op) {
+    return LocationOperand::cast(op)->GetSimd256Register();
+  }
+#endif
+
+  Constant ToConstant(InstructionOperand* op) const {
     if (op->IsImmediate()) {
       return gen_->instructions()->GetImmediate(ImmediateOperand::cast(op));
     }
@@ -183,9 +211,10 @@ class InstructionOperandConverter {
 // Deoptimization exit.
 class DeoptimizationExit : public ZoneObject {
  public:
-  explicit DeoptimizationExit(SourcePosition pos, BailoutId bailout_id,
+  explicit DeoptimizationExit(SourcePosition pos, BytecodeOffset bailout_id,
                               int translation_id, int pc_offset,
-                              DeoptimizeKind kind, DeoptimizeReason reason)
+                              DeoptimizeKind kind, DeoptimizeReason reason,
+                              NodeId node_id)
       : deoptimization_id_(kNoDeoptIndex),
         pos_(pos),
         bailout_id_(bailout_id),
@@ -193,6 +222,8 @@ class DeoptimizationExit : public ZoneObject {
         pc_offset_(pc_offset),
         kind_(kind),
         reason_(reason),
+        node_id_(node_id),
+        immediate_args_(nullptr),
         emitted_(false) {}
 
   bool has_deoptimization_id() const {
@@ -206,12 +237,22 @@ class DeoptimizationExit : public ZoneObject {
     deoptimization_id_ = deoptimization_id;
   }
   SourcePosition pos() const { return pos_; }
+  // The label for the deoptimization call.
   Label* label() { return &label_; }
-  BailoutId bailout_id() const { return bailout_id_; }
+  // The label after the deoptimization check, which will resume execution.
+  Label* continue_label() { return &continue_label_; }
+  BytecodeOffset bailout_id() const { return bailout_id_; }
   int translation_id() const { return translation_id_; }
   int pc_offset() const { return pc_offset_; }
   DeoptimizeKind kind() const { return kind_; }
   DeoptimizeReason reason() const { return reason_; }
+  NodeId node_id() const { return node_id_; }
+  const ZoneVector<ImmediateOperand*>* immediate_args() const {
+    return immediate_args_;
+  }
+  void set_immediate_args(ZoneVector<ImmediateOperand*>* immediate_args) {
+    immediate_args_ = immediate_args;
+  }
   // Returns whether the deopt exit has already been emitted. Most deopt exits
   // are emitted contiguously at the end of the code, but unconditional deopt
   // exits (kArchDeoptimize) may be inlined where they are encountered.
@@ -223,11 +264,14 @@ class DeoptimizationExit : public ZoneObject {
   int deoptimization_id_;
   const SourcePosition pos_;
   Label label_;
-  const BailoutId bailout_id_;
+  Label continue_label_;
+  const BytecodeOffset bailout_id_;
   const int translation_id_;
   const int pc_offset_;
   const DeoptimizeKind kind_;
   const DeoptimizeReason reason_;
+  const NodeId node_id_;
+  ZoneVector<ImmediateOperand*>* immediate_args_;
   bool emitted_;
 };
 
@@ -242,21 +286,16 @@ class OutOfLineCode : public ZoneObject {
   Label* entry() { return &entry_; }
   Label* exit() { return &exit_; }
   const Frame* frame() const { return frame_; }
-  TurboAssembler* tasm() { return tasm_; }
+  MacroAssembler* masm() { return masm_; }
   OutOfLineCode* next() const { return next_; }
 
  private:
   Label entry_;
   Label exit_;
   const Frame* const frame_;
-  TurboAssembler* const tasm_;
+  MacroAssembler* const masm_;
   OutOfLineCode* const next_;
 };
-
-inline bool HasCallDescriptorFlag(Instruction* instr,
-                                  CallDescriptor::Flag flag) {
-  return MiscField::decode(instr->opcode()) & flag;
-}
 
 }  // namespace compiler
 }  // namespace internal

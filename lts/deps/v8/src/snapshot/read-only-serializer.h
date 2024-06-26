@@ -7,6 +7,7 @@
 
 #include <unordered_set>
 
+#include "src/base/hashmap.h"
 #include "src/snapshot/roots-serializer.h"
 
 namespace v8 {
@@ -17,30 +18,45 @@ class SnapshotByteSink;
 
 class V8_EXPORT_PRIVATE ReadOnlySerializer : public RootsSerializer {
  public:
-  explicit ReadOnlySerializer(Isolate* isolate);
+  ReadOnlySerializer(Isolate* isolate, Snapshot::SerializerFlags flags);
   ~ReadOnlySerializer() override;
+  ReadOnlySerializer(const ReadOnlySerializer&) = delete;
+  ReadOnlySerializer& operator=(const ReadOnlySerializer&) = delete;
 
   void SerializeReadOnlyRoots();
 
-  // Completes the serialization of the read-only object cache and serializes
-  // any deferred objects.
+  // Completes the serialization of the read-only object cache (after it has
+  // been filled by other serializers) and serializes any deferred objects.
   void FinalizeSerialization();
+
+ private:
+  void ReconstructReadOnlyObjectCacheForTesting();
+
+  void SerializeObjectImpl(Handle<HeapObject> o) override;
+  bool MustBeDeferred(HeapObject object) override;
 
   // If |obj| can be serialized in the read-only snapshot then add it to the
   // read-only object cache if not already present and emit a
   // ReadOnlyObjectCache bytecode into |sink|. Returns whether this was
   // successful.
   bool SerializeUsingReadOnlyObjectCache(SnapshotByteSink* sink,
-                                         HeapObject obj);
+                                         Handle<HeapObject> obj);
 
- private:
-  void SerializeObject(HeapObject o) override;
-  bool MustBeDeferred(HeapObject object) override;
+#ifdef V8_STATIC_ROOTS
+  using CodeEntryPointVector = std::vector<Address>;
+  void WipeCodeEntryPointsForDeterministicSerialization(
+      CodeEntryPointVector& saved_entry_points);
+  void RestoreCodeEntryPoints(const CodeEntryPointVector& saved_entry_points);
+#endif  // V8_STATIC_ROOTS
 
 #ifdef DEBUG
-  std::unordered_set<HeapObject, Object::Hasher> serialized_objects_;
+  IdentityMap<int, base::DefaultAllocationPolicy> serialized_objects_;
+  bool did_serialize_not_mapped_symbol_;
 #endif
-  DISALLOW_COPY_AND_ASSIGN(ReadOnlySerializer);
+
+  // For SerializeUsingReadOnlyObjectCache.
+  friend class SharedHeapSerializer;
+  friend class StartupSerializer;
 };
 
 }  // namespace internal

@@ -1,8 +1,8 @@
-/* eslint-disable node-core/require-common-first, node-core/required-modules */
 'use strict';
 
 const assert = require('assert');
 const os = require('os');
+const { isIP } = require('net');
 
 const types = {
   A: 1,
@@ -13,11 +13,12 @@ const types = {
   PTR: 12,
   MX: 15,
   TXT: 16,
-  ANY: 255
+  ANY: 255,
+  CAA: 257,
 };
 
 const classes = {
-  IN: 1
+  IN: 1,
 };
 
 // Naïve DNS parser/serializer.
@@ -34,16 +35,16 @@ function readDomainFromPacket(buffer, offset) {
     const { nread, domain } = readDomainFromPacket(buffer, offset + length);
     return {
       nread: 1 + length + nread,
-      domain: domain ? `${chunk}.${domain}` : chunk
+      domain: domain ? `${chunk}.${domain}` : chunk,
     };
   }
   // Pointer to another part of the packet.
   assert.strictEqual(length & 0xC0, 0xC0);
-  // eslint-disable-next-line space-infix-ops, space-unary-ops
+  // eslint-disable-next-line @stylistic/js/space-infix-ops, @stylistic/js/space-unary-ops
   const pointeeOffset = buffer.readUInt16BE(offset) &~ 0xC000;
   return {
     nread: 2,
-    domain: readDomainFromPacket(buffer, pointeeOffset)
+    domain: readDomainFromPacket(buffer, pointeeOffset),
   };
 }
 
@@ -59,7 +60,7 @@ function parseDNSPacket(buffer) {
     ['questions', buffer.readUInt16BE(4)],
     ['answers', buffer.readUInt16BE(6)],
     ['authorityAnswers', buffer.readUInt16BE(8)],
-    ['additionalRecords', buffer.readUInt16BE(10)]
+    ['additionalRecords', buffer.readUInt16BE(10)],
   ];
 
   let offset = 12;
@@ -184,7 +185,7 @@ function writeDomainName(domain) {
     assert(label.length < 64);
     return Buffer.concat([
       Buffer.from([label.length]),
-      Buffer.from(label, 'ascii')
+      Buffer.from(label, 'ascii'),
     ]);
   }).concat([Buffer.alloc(1)]));
 }
@@ -207,7 +208,7 @@ function writeDNSPacket(parsed) {
     buffers.push(writeDomainName(q.domain));
     buffers.push(new Uint16Array([
       types[q.type],
-      q.cls === undefined ? classes.IN : q.cls
+      q.cls === undefined ? classes.IN : q.cls,
     ]));
   }
 
@@ -220,7 +221,7 @@ function writeDNSPacket(parsed) {
     buffers.push(writeDomainName(rr.domain));
     buffers.push(new Uint16Array([
       types[rr.type],
-      rr.cls === undefined ? classes.IN : rr.cls
+      rr.cls === undefined ? classes.IN : rr.cls,
     ]));
     buffers.push(new Int32Array([rr.ttl]));
 
@@ -236,7 +237,7 @@ function writeDNSPacket(parsed) {
         rdLengthBuf[0] = 16;
         buffers.push(writeIPv6(rr.address));
         break;
-      case 'TXT':
+      case 'TXT': {
         const total = rr.entries.map((s) => s.length).reduce((a, b) => a + b);
         // Total length of all strings + 1 byte each for their lengths.
         rdLengthBuf[0] = rr.entries.length + total;
@@ -245,6 +246,7 @@ function writeDNSPacket(parsed) {
           buffers.push(Buffer.from(txt));
         }
         break;
+      }
       case 'MX':
         rdLengthBuf[0] = 2;
         buffers.push(new Uint16Array([rr.priority]));
@@ -265,8 +267,16 @@ function writeDNSPacket(parsed) {
         rdLengthBuf[0] = mname.length + rname.length + 20;
         buffers.push(mname, rname);
         buffers.push(new Uint32Array([
-          rr.serial, rr.refresh, rr.retry, rr.expire, rr.minttl
+          rr.serial, rr.refresh, rr.retry, rr.expire, rr.minttl,
         ]));
+        break;
+      }
+      case 'CAA':
+      {
+        rdLengthBuf[0] = 5 + rr.issue.length + 2;
+        buffers.push(Buffer.from([Number(rr.critical)]));
+        buffers.push(Buffer.from([Number(5)]));
+        buffers.push(Buffer.from('issue' + rr.issue));
         break;
       }
       default:
@@ -300,6 +310,25 @@ function errorLookupMock(code = mockedErrorCode, syscall = mockedSysCall) {
   };
 }
 
+function createMockedLookup(...addresses) {
+  addresses = addresses.map((address) => ({ address: address, family: isIP(address) }));
+
+  // Create a DNS server which replies with a AAAA and a A record for the same host
+  return function lookup(hostname, options, cb) {
+    if (options.all === true) {
+      process.nextTick(() => {
+        cb(null, addresses);
+      });
+
+      return;
+    }
+
+    process.nextTick(() => {
+      cb(null, addresses[0].address, addresses[0].family);
+    });
+  };
+}
+
 module.exports = {
   types,
   classes,
@@ -307,5 +336,6 @@ module.exports = {
   parseDNSPacket,
   errorLookupMock,
   mockedErrorCode,
-  mockedSysCall
+  mockedSysCall,
+  createMockedLookup,
 };
