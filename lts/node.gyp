@@ -523,6 +523,8 @@
       'include_dirs': [
         'src',
         'deps/v8/include',
+        'deps/libsquash/include',
+        'deps/libsquash/sample',
         'deps/postject'
       ],
 
@@ -532,6 +534,7 @@
 
       'dependencies': [
         'deps/histogram/histogram.gyp:histogram',
+        'deps/libsquash/enclose_io_libsquash.gyp:enclose_io_libsquash',
         'deps/uvwasi/uvwasi.gyp:uvwasi',
       ],
 
@@ -822,11 +825,14 @@
       'include_dirs': [
         'src',
         'deps/postject',
+        'deps/libsquash/include',
+        'deps/libsquash/sample',
         '<(SHARED_INTERMEDIATE_DIR)' # for node_natives.h
       ],
       'dependencies': [
         'deps/base64/base64.gyp:base64',
         'deps/googletest/googletest.gyp:gtest_prod',
+        'deps/libsquash/enclose_io_libsquash.gyp:enclose_io_libsquash',
         'deps/histogram/histogram.gyp:histogram',
         'deps/uvwasi/uvwasi.gyp:uvwasi',
         'deps/simdutf/simdutf.gyp:simdutf',
@@ -1147,6 +1153,7 @@
         'deps/googletest/googletest.gyp:gtest',
         'deps/googletest/googletest.gyp:gtest_main',
         'deps/histogram/histogram.gyp:histogram',
+        'deps/libsquash/enclose_io_libsquash.gyp:enclose_io_libsquash',
         'deps/uvwasi/uvwasi.gyp:uvwasi',
         'deps/simdutf/simdutf.gyp:simdutf',
         'deps/ada/ada.gyp:ada',
